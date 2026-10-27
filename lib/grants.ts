@@ -1,42 +1,37 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq } from "drizzle-orm";
-import { db } from "./db";
+import { db, transaction } from "./db";
 import * as s from "./db/schema";
 import { grantInput, stageInput } from "./validation";
 import { type Actor, requireRole } from "./auth";
 import { addDays, today } from "./utils";
 export const now = () => new Date().toISOString();
 export const id = () => randomUUID();
-export function audit(
+export async function audit(
   actor: Actor,
   grantId: string | null,
   action: string,
   details: unknown,
 ) {
-  db.insert(s.auditLogs)
-    .values({
-      id: id(),
-      actorId: actor.id,
-      grantId,
-      action,
-      details: JSON.stringify(details),
-      createdAt: now(),
-    })
-    .run();
+  await db.insert(s.auditLogs).values({
+    id: id(),
+    actorId: actor.id,
+    grantId,
+    action,
+    details: JSON.stringify(details),
+    createdAt: now(),
+  });
 }
-export function getGrant(grantId: string) {
-  const grant = db
-    .select()
-    .from(s.grants)
-    .where(eq(s.grants.id, grantId))
-    .get();
+export async function getGrant(grantId: string) {
+  const grant = (
+    await db.select().from(s.grants).where(eq(s.grants.id, grantId)).limit(1)
+  )[0];
   if (!grant) throw new Error("Grant not found");
-  const stages = db
+  const stages = await db
     .select()
     .from(s.stages)
     .where(eq(s.stages.grantId, grantId))
-    .orderBy(asc(s.stages.position))
-    .all();
+    .orderBy(asc(s.stages.position));
   return {
     ...grant,
     stages,
@@ -46,98 +41,119 @@ export function getGrant(grantId: string) {
     ),
   };
 }
-export function referenceData() {
+export async function referenceData() {
+  const users = await db.select().from(s.users);
+  const cycles = await db.select().from(s.cycles);
+  const templates = await db.select().from(s.templates);
+  const definitions = await db
+    .select()
+    .from(s.templateStages)
+    .orderBy(asc(s.templateStages.position));
   return {
-    users: db.select().from(s.users).all(),
-    cycles: db.select().from(s.cycles).all(),
-    templates: db
-      .select()
-      .from(s.templates)
-      .all()
-      .map((t) => ({
-        ...t,
-        stages: db
-          .select()
-          .from(s.templateStages)
-          .where(eq(s.templateStages.templateId, t.id))
-          .orderBy(asc(s.templateStages.position))
-          .all(),
-      })),
-    mappings: db.select().from(s.mappings).all(),
+    users,
+    cycles,
+    templates: templates.map((t) => ({
+      ...t,
+      stages: definitions.filter((st) => st.templateId === t.id),
+    })),
+    mappings: await db.select().from(s.mappings),
   };
 }
-export function listGrants(includeArchived = false) {
-  const refs = referenceData();
-  return db
+export async function listGrants(includeArchived = false) {
+  const users = await db.select().from(s.users);
+  const cycles = await db.select().from(s.cycles);
+  const rows = await db
     .select()
     .from(s.grants)
-    .orderBy(desc(s.grants.updatedAt))
-    .all()
+    .orderBy(desc(s.grants.updatedAt));
+  const definitions = await db
+    .select()
+    .from(s.stages)
+    .orderBy(asc(s.stages.position));
+  const notes = await db
+    .select({
+      grantId: s.stages.grantId,
+      text: s.comments.text,
+      createdAt: s.comments.createdAt,
+    })
+    .from(s.comments)
+    .innerJoin(s.stages, eq(s.comments.stageId, s.stages.id))
+    .orderBy(desc(s.comments.createdAt));
+  return rows
     .filter((g) => includeArchived || !g.archived)
     .map((g) => {
-      const full = getGrant(g.id);
-      const cycle = refs.cycles.find((c) => c.id === g.cycleId);
-      const latest = db
-        .select({ text: s.comments.text, createdAt: s.comments.createdAt })
-        .from(s.comments)
-        .innerJoin(s.stages, eq(s.comments.stageId, s.stages.id))
-        .where(eq(s.stages.grantId, g.id))
-        .orderBy(desc(s.comments.createdAt))
-        .get();
+      const stages = definitions.filter((st) => st.grantId === g.id);
+      const current = stages.find((st) => st.position === g.currentPosition)!;
+      const next = stages.find(
+        (st) => st.position > g.currentPosition && st.status === "Not Started",
+      );
       return {
-        ...full,
-        cycle,
-        latest,
-        owner: refs.users.find((u) => u.id === full.current.ownerId),
-        nextOwner: refs.users.find((u) => u.id === full.next?.ownerId),
+        ...g,
+        stages,
+        current,
+        next,
+        cycle: cycles.find((c) => c.id === g.cycleId),
+        latest: notes.find((n) => n.grantId === g.id),
+        owner: users.find((u) => u.id === current.ownerId),
+        nextOwner: users.find((u) => u.id === next?.ownerId),
       };
     });
 }
-export function createGrant(raw: unknown, actor: Actor, demo = false) {
+export async function createGrant(raw: unknown, actor: Actor, demo = false) {
   const input = grantInput.parse(raw);
-  return db.transaction(() => {
-    if (!db.select().from(s.users).where(eq(s.users.id, input.managerId)).get())
+  return await transaction(async () => {
+    if (
+      !(
+        await db
+          .select()
+          .from(s.users)
+          .where(eq(s.users.id, input.managerId))
+          .limit(1)
+      )[0]
+    )
       throw new Error("Owner not found");
     if (input.cycleId) {
-      const c = db
-        .select()
-        .from(s.cycles)
-        .where(eq(s.cycles.id, input.cycleId))
-        .get();
+      const c = (
+        await db
+          .select()
+          .from(s.cycles)
+          .where(eq(s.cycles.id, input.cycleId))
+          .limit(1)
+      )[0];
       if (!c || c.programId !== input.programId)
         throw new Error("Funding cycle must match funding program");
     }
-    const definitions = db
+    const definitions = await db
       .select()
       .from(s.templateStages)
       .where(eq(s.templateStages.templateId, input.templateId))
-      .orderBy(asc(s.templateStages.position))
-      .all();
+      .orderBy(asc(s.templateStages.position));
     if (!definitions.length || !definitions[input.startingPosition])
       throw new Error("Invalid workflow or starting stage");
     if (
       input.externalId &&
-      db
-        .select()
-        .from(s.grants)
-        .where(eq(s.grants.externalId, input.externalId))
-        .get()
+      (
+        await db
+          .select()
+          .from(s.grants)
+          .where(eq(s.grants.externalId, input.externalId))
+          .limit(1)
+      )[0]
     )
       throw new Error("Duplicate grant ID");
     const grantId = id();
     const { startingPosition, ...fields } = input;
-    db.insert(s.grants)
-      .values({
-        ...fields,
-        id: grantId,
-        currentPosition: startingPosition,
-        status:
-          definitions[startingPosition].name === "Closed" ? "Closed" : "Active",
-        demo,
-        createdAt: now(),
-        updatedAt: now(),
-      })
-      .run();
+    await db.insert(s.grants).values({
+      ...fields,
+      id: grantId,
+      currentPosition: startingPosition,
+      status:
+        definitions[startingPosition].name === "Closed" ? "Closed" : "Active",
+      demo,
+      createdAt: now(),
+      updatedAt: now(),
+    });
+    const newStages: (typeof s.stages.$inferInsert)[] = [];
     let cursor: string | null = today();
     for (const stage of definitions) {
       const previous = stage.position < startingPosition;
@@ -173,77 +189,80 @@ export function createGrant(raw: unknown, actor: Actor, demo = false) {
         deadline = input.endDate;
         estimated = false;
       }
-      db.insert(s.stages)
-        .values({
-          id: id(),
-          grantId,
-          position: stage.position,
-          name: stage.name,
-          description: stage.description,
-          role: stage.role,
-          ownerId: stage.defaultOwnerId || input.managerId,
-          externalParty: stage.externalParty,
-          duration: stage.duration,
-          optional: stage.optional,
-          decision: stage.decision,
-          status: previous
-            ? "Skipped"
-            : current
-              ? stage.name === "Closed"
-                ? "Completed"
-                : "In Progress"
-              : "Not Started",
-          skipReason: previous
-            ? "Started tracking at a later stage; prior completion dates are unknown"
-            : null,
-          plannedStart: previous ? null : cursor,
-          deadline: previous ? null : deadline,
-          estimated,
-          actualStart: current ? now() : null,
-          completedAt: current && stage.name === "Closed" ? now() : null,
-          updatedAt: now(),
-          updatedBy: actor.id,
-        })
-        .run();
+      newStages.push({
+        id: id(),
+        grantId,
+        position: stage.position,
+        name: stage.name,
+        description: stage.description,
+        role: stage.role,
+        ownerId: stage.defaultOwnerId || input.managerId,
+        externalParty: stage.externalParty,
+        duration: stage.duration,
+        optional: stage.optional,
+        decision: stage.decision,
+        status: previous
+          ? "Skipped"
+          : current
+            ? stage.name === "Closed"
+              ? "Completed"
+              : "In Progress"
+            : "Not Started",
+        skipReason: previous
+          ? "Started tracking at a later stage; prior completion dates are unknown"
+          : null,
+        plannedStart: previous ? null : cursor,
+        deadline: previous ? null : deadline,
+        estimated,
+        actualStart: current ? now() : null,
+        completedAt: current && stage.name === "Closed" ? now() : null,
+        updatedAt: now(),
+        updatedBy: actor.id,
+      });
       if (!previous) cursor = deadline;
     }
-    audit(actor, grantId, "Grant created", { ...input, demo });
+    await db.insert(s.stages).values(newStages);
+    await audit(actor, grantId, "Grant created", { ...input, demo });
     return grantId;
   });
 }
-export function updateGrant(grantId: string, raw: unknown, actor: Actor) {
-  requireRole(actor, ["Admin", "Manager"]);
-  const old = getGrant(grantId);
-  const input = grantInput.parse({
-    ...old,
-    ...(raw as object),
-    startingPosition: old.currentPosition,
-  });
-  if (input.cycleId) {
-    const cycle = db
-      .select()
-      .from(s.cycles)
-      .where(eq(s.cycles.id, input.cycleId))
-      .get();
-    if (!cycle || cycle.programId !== input.programId)
-      throw new Error("Funding cycle must match funding program");
-  }
-  const { startingPosition: unused, templateId: ignored, ...fields } = input;
-  void unused;
-  void ignored;
-  db.transaction(() => {
-    db.update(s.grants)
-      .set({ ...fields, updatedAt: now() })
-      .where(eq(s.grants.id, grantId))
-      .run();
-    audit(actor, grantId, "Grant details updated", {
-      before: old,
-      after: fields,
+export async function updateGrant(grantId: string, raw: unknown, actor: Actor) {
+  return transaction(async () => {
+    requireRole(actor, ["Admin", "Manager"]);
+    const old = await getGrant(grantId);
+    const input = grantInput.parse({
+      ...old,
+      ...(raw as object),
+      startingPosition: old.currentPosition,
+    });
+    if (input.cycleId) {
+      const cycle = (
+        await db
+          .select()
+          .from(s.cycles)
+          .where(eq(s.cycles.id, input.cycleId))
+          .limit(1)
+      )[0];
+      if (!cycle || cycle.programId !== input.programId)
+        throw new Error("Funding cycle must match funding program");
+    }
+    const { startingPosition: unused, templateId: ignored, ...fields } = input;
+    void unused;
+    void ignored;
+    await transaction(async () => {
+      await db
+        .update(s.grants)
+        .set({ ...fields, updatedAt: now() })
+        .where(eq(s.grants.id, grantId));
+      await audit(actor, grantId, "Grant details updated", {
+        before: old,
+        after: fields,
+      });
     });
   });
 }
-export function editable(grantId: string, actor: Actor) {
-  const g = getGrant(grantId);
+export async function editable(grantId: string, actor: Actor) {
+  const g = await getGrant(grantId);
   if (
     actor.role === "Staff" &&
     g.managerId !== actor.id &&
@@ -254,49 +273,66 @@ export function editable(grantId: string, actor: Actor) {
     );
   return g;
 }
-function ensureActive(g: ReturnType<typeof getGrant>) {
+async function ensureActive(g: Awaited<ReturnType<typeof getGrant>>) {
   if (g.archived)
     throw new Error("Restore this archived grant before changing stages");
   if (g.status !== "Active")
     throw new Error("Grant must be active to change stages");
   if (
     g.cycleId &&
-    db.select().from(s.cycles).where(eq(s.cycles.id, g.cycleId)).get()?.paused
+    (
+      await db
+        .select()
+        .from(s.cycles)
+        .where(eq(s.cycles.id, g.cycleId))
+        .limit(1)
+    )[0]?.paused
   )
     throw new Error(
       "Funding cycle is paused; resume it before changing stages",
     );
 }
-export function archiveGrant(grantId: string, archived: boolean, actor: Actor) {
-  requireRole(actor, ["Admin", "Manager"]);
-  getGrant(grantId);
-  db.transaction(() => {
-    db.update(s.grants)
-      .set({ archived, updatedAt: now() })
-      .where(eq(s.grants.id, grantId))
-      .run();
-    audit(actor, grantId, archived ? "Grant archived" : "Grant restored", {});
+export async function archiveGrant(
+  grantId: string,
+  archived: boolean,
+  actor: Actor,
+) {
+  return transaction(async () => {
+    requireRole(actor, ["Admin", "Manager"]);
+    await getGrant(grantId);
+    await transaction(async () => {
+      await db
+        .update(s.grants)
+        .set({ archived, updatedAt: now() })
+        .where(eq(s.grants.id, grantId));
+      await audit(
+        actor,
+        grantId,
+        archived ? "Grant archived" : "Grant restored",
+        {},
+      );
+    });
   });
 }
-export function updateStage(
+export async function updateStage(
   grantId: string,
   raw: unknown,
   actor: Actor,
   expectedStageId?: string,
 ) {
   const values = stageInput.parse(raw);
-  db.transaction(() => {
-    const g = editable(grantId, actor);
+  await transaction(async () => {
+    const g = await editable(grantId, actor);
     if (expectedStageId && g.current.id !== expectedStageId)
       throw new Error(
         "This stage changed in another session. Refresh before saving.",
       );
-    ensureActive(g);
+    await ensureActive(g);
     const { recalculate, ...fields } = values;
-    db.update(s.stages)
+    await db
+      .update(s.stages)
       .set({ ...fields, updatedAt: now(), updatedBy: actor.id })
-      .where(eq(s.stages.id, g.current.id))
-      .run();
+      .where(eq(s.stages.id, g.current.id));
     if (recalculate) {
       let cursor = fields.deadline;
       for (const stage of g.stages.filter(
@@ -310,29 +346,29 @@ export function updateStage(
           cursor && stage.duration != null
             ? addDays(cursor, stage.duration)
             : null;
-        db.update(s.stages)
+        await db
+          .update(s.stages)
           .set({
             plannedStart: cursor,
             deadline,
             updatedAt: now(),
             updatedBy: actor.id,
           })
-          .where(eq(s.stages.id, stage.id))
-          .run();
+          .where(eq(s.stages.id, stage.id));
         cursor = deadline;
       }
     }
-    db.update(s.grants)
+    await db
+      .update(s.grants)
       .set({ updatedAt: now() })
-      .where(eq(s.grants.id, grantId))
-      .run();
-    audit(actor, grantId, "Stage updated", {
+      .where(eq(s.grants.id, grantId));
+    await audit(actor, grantId, "Stage updated", {
       before: g.current,
       after: values,
     });
   });
 }
-export function advanceGrant(
+export async function advanceGrant(
   grantId: string,
   actor: Actor,
   options: {
@@ -343,13 +379,13 @@ export function advanceGrant(
     appeals?: boolean;
   } = {},
 ) {
-  return db.transaction(() => {
-    const g = editable(grantId, actor);
+  return await transaction(async () => {
+    const g = await editable(grantId, actor);
     if (options.expectedStageId && g.current.id !== options.expectedStageId)
       throw new Error(
         "This stage already advanced. Refresh before continuing.",
       );
-    ensureActive(g);
+    await ensureActive(g);
     if (g.current.status === "Blocked")
       throw new Error("Resolve the blocker before advancing");
     if (options.skip && (!g.current.optional || !options.reason?.trim()))
@@ -361,7 +397,8 @@ export function advanceGrant(
     );
     if (next?.optional && options.appeals === undefined)
       throw new Error("Choose whether an appeal is required");
-    db.update(s.stages)
+    await db
+      .update(s.stages)
       .set({
         status: options.skip ? "Skipped" : "Completed",
         skipReason: options.skip ? options.reason : null,
@@ -369,44 +406,44 @@ export function advanceGrant(
         updatedAt: now(),
         updatedBy: actor.id,
       })
-      .where(eq(s.stages.id, g.current.id))
-      .run();
+      .where(eq(s.stages.id, g.current.id));
     if (options.decision === "Not Selected") {
       for (const stage of g.stages.filter(
         (x) => x.position > g.currentPosition,
       ))
-        db.update(s.stages)
+        await db
+          .update(s.stages)
           .set({
             status: "Skipped",
             skipReason: "Not selected for funding",
             updatedAt: now(),
             updatedBy: actor.id,
           })
-          .where(eq(s.stages.id, stage.id))
-          .run();
-      db.update(s.grants)
+          .where(eq(s.stages.id, stage.id));
+      await db
+        .update(s.grants)
         .set({ status: "Not Selected", updatedAt: now() })
-        .where(eq(s.grants.id, grantId))
-        .run();
+        .where(eq(s.grants.id, grantId));
     } else {
       let target = next;
       if (target?.optional && options.appeals === false) {
-        db.update(s.stages)
+        await db
+          .update(s.stages)
           .set({
             status: "Skipped",
             skipReason: "No appeal required",
             updatedAt: now(),
             updatedBy: actor.id,
           })
-          .where(eq(s.stages.id, target.id))
-          .run();
+          .where(eq(s.stages.id, target.id));
         target = g.stages.find(
           (x) => x.position > target!.position && x.status === "Not Started",
         );
       }
       if (target) {
         const closed = target.name === "Closed";
-        db.update(s.stages)
+        await db
+          .update(s.stages)
           .set({
             status: closed ? "Completed" : "In Progress",
             actualStart: now(),
@@ -420,94 +457,111 @@ export function advanceGrant(
             updatedAt: now(),
             updatedBy: actor.id,
           })
-          .where(eq(s.stages.id, target.id))
-          .run();
-        db.update(s.grants)
+          .where(eq(s.stages.id, target.id));
+        await db
+          .update(s.grants)
           .set({
             currentPosition: target.position,
             status: closed ? "Closed" : "Active",
             updatedAt: now(),
           })
-          .where(eq(s.grants.id, grantId))
-          .run();
+          .where(eq(s.grants.id, grantId));
       } else
-        db.update(s.grants)
+        await db
+          .update(s.grants)
           .set({ status: "Closed", updatedAt: now() })
-          .where(eq(s.grants.id, grantId))
-          .run();
+          .where(eq(s.grants.id, grantId));
     }
-    audit(actor, grantId, "Stage advanced", {
+    await audit(actor, grantId, "Stage advanced", {
       stage: g.current.name,
       ...options,
     });
-    return getGrant(grantId);
+    return await getGrant(grantId);
   });
 }
-export function addComment(
+export async function addComment(
   grantId: string,
   stageId: string,
   text: string,
   indicator: string | null,
   actor: Actor,
 ) {
-  if (!text.trim() || text.length > 10000)
-    throw new Error("Comment must contain 1–10,000 characters");
-  if (indicator && !["Update", "Blocker", "Decision"].includes(indicator))
-    throw new Error("Invalid comment indicator");
-  const stage = db
-    .select()
-    .from(s.stages)
-    .where(and(eq(s.stages.id, stageId), eq(s.stages.grantId, grantId)))
-    .get();
-  if (!stage) throw new Error("Stage not found");
-  return db.transaction(() => {
-    const commentId = id();
-    db.insert(s.comments)
-      .values({
+  return transaction(async () => {
+    if (!text.trim() || text.length > 10000)
+      throw new Error("Comment must contain 1–10,000 characters");
+    if (indicator && !["Update", "Blocker", "Decision"].includes(indicator))
+      throw new Error("Invalid comment indicator");
+    const stage = (
+      await db
+        .select()
+        .from(s.stages)
+        .where(and(eq(s.stages.id, stageId), eq(s.stages.grantId, grantId)))
+        .limit(1)
+    )[0];
+    if (!stage) throw new Error("Stage not found");
+    return await transaction(async () => {
+      const commentId = id();
+      await db.insert(s.comments).values({
         id: commentId,
         stageId,
         authorId: actor.id,
         text: text.trim(),
         indicator,
         createdAt: now(),
-      })
-      .run();
-    db.update(s.grants)
-      .set({ updatedAt: now() })
-      .where(eq(s.grants.id, grantId))
-      .run();
-    audit(actor, grantId, "Comment added", {
-      stageId,
-      indicator,
-      text: text.trim(),
+      });
+      await db
+        .update(s.grants)
+        .set({ updatedAt: now() })
+        .where(eq(s.grants.id, grantId));
+      await audit(actor, grantId, "Comment added", {
+        stageId,
+        indicator,
+        text: text.trim(),
+      });
+      return commentId;
     });
-    return commentId;
   });
 }
-export function setHold(grantId: string, hold: boolean, actor: Actor) {
-  requireRole(actor, ["Admin", "Manager"]);
-  const g = getGrant(grantId);
-  if (!["Active", "On Hold"].includes(g.status))
-    throw new Error("Closed grants cannot be paused");
-  db.transaction(() => {
-    db.update(s.grants)
-      .set({ status: hold ? "On Hold" : "Active", updatedAt: now() })
-      .where(eq(s.grants.id, grantId))
-      .run();
-    audit(actor, grantId, hold ? "Grant paused" : "Grant resumed", {});
+export async function setHold(grantId: string, hold: boolean, actor: Actor) {
+  return transaction(async () => {
+    requireRole(actor, ["Admin", "Manager"]);
+    const g = await getGrant(grantId);
+    if (!["Active", "On Hold"].includes(g.status))
+      throw new Error("Closed grants cannot be paused");
+    await transaction(async () => {
+      await db
+        .update(s.grants)
+        .set({ status: hold ? "On Hold" : "Active", updatedAt: now() })
+        .where(eq(s.grants.id, grantId));
+      await audit(actor, grantId, hold ? "Grant paused" : "Grant resumed", {});
+    });
   });
 }
-export function pauseCycle(cycleId: string, paused: boolean, actor: Actor) {
-  requireRole(actor, ["Admin", "Manager"]);
-  if (!db.select().from(s.cycles).where(eq(s.cycles.id, cycleId)).get())
-    throw new Error("Cycle not found");
-  db.transaction(() => {
-    db.update(s.cycles).set({ paused }).where(eq(s.cycles.id, cycleId)).run();
-    audit(
-      actor,
-      null,
-      paused ? "Funding cycle paused" : "Funding cycle resumed",
-      { cycleId },
-    );
+export async function pauseCycle(
+  cycleId: string,
+  paused: boolean,
+  actor: Actor,
+) {
+  return transaction(async () => {
+    requireRole(actor, ["Admin", "Manager"]);
+    if (
+      !(
+        await db
+          .select()
+          .from(s.cycles)
+          .where(eq(s.cycles.id, cycleId))
+          .limit(1)
+      )[0]
+    )
+      throw new Error("Cycle not found");
+    await transaction(async () => {
+      await db.update(s.cycles).set({ paused }).where(eq(s.cycles.id, cycleId));
+      await audit(
+        actor,
+        null,
+        paused ? "Funding cycle paused" : "Funding cycle resumed",
+        { cycleId },
+      );
+    });
   });
 }

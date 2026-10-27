@@ -1,10 +1,10 @@
-import { currentUser } from "@/lib/auth";
+import { requireUser } from "@/lib/require-user";
 import { referenceData, listGrants } from "@/lib/grants";
 import Link from "next/link";
 import { ActionButton } from "@/components/forms";
 import { PageHeading, Badge } from "@/components/common";
 export default async function Page() {
-  const user = await currentUser();
+  const user = await requireUser();
   return (
     <>
       <PageHeading
@@ -19,7 +19,7 @@ export default async function Page() {
               Archiving removes a grant from the tracker while retaining its
               history. Restore it here.
             </p>
-            {listGrants(true)
+            {(await listGrants(true))
               .filter((g) => g.archived)
               .map((g) => (
                 <div className="document-row" key={g.id}>
@@ -40,7 +40,9 @@ export default async function Page() {
           >
             {process.env.AUTH_MODE === "development"
               ? "Development authentication"
-              : "Identity gateway authentication"}
+              : process.env.AUTH_MODE === "entra"
+                ? "Microsoft Entra sign-in"
+                : "Identity gateway authentication"}
           </Badge>
           <div>
             <h3>Signed in as {user.name}</h3>
@@ -54,10 +56,9 @@ export default async function Page() {
           <div>
             <h3>Production deployment</h3>
             <p>
-              Development authentication is rejected when NODE_ENV=production.
-              Connect a trusted Microsoft Entra ID gateway using short-lived
-              signed tokens, provision real staff accounts, and restrict direct
-              server access. See README for the deployment checklist.
+              Staff access is managed by your workspace administrator. Use your
+              organization?s Microsoft account to sign in. Contact your
+              administrator if your access or role needs to change.
             </p>
           </div>
           <div>
@@ -127,7 +128,7 @@ export default async function Page() {
             Seed accounts are fictional. Account provisioning is an operator
             task; the browser cannot promote users or switch identities.
           </p>
-          {referenceData().users.map((u) => (
+          {(await referenceData()).users.map((u) => (
             <div className="document-row" key={u.id}>
               <strong>{u.name}</strong>
               <span>{u.email}</span>

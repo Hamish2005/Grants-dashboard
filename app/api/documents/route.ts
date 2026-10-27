@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
+import { putFile, readStoredFile, deleteFile } from "@/lib/storage";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { db } from "@/lib/db";
+import { db, transaction } from "@/lib/db";
 import { documents } from "@/lib/db/schema";
 import { currentUser, checkOrigin } from "@/lib/auth";
 import { editable, id, now, audit } from "@/lib/grants";
-import { validateFile, uploadRoot, MAX_FILE } from "@/lib/imports";
+import { validateFile, MAX_FILE } from "@/lib/imports";
 import { limitedForm } from "@/lib/http";
 export async function POST(request: Request) {
   let filePath: string | undefined;
@@ -14,11 +14,11 @@ export async function POST(request: Request) {
     checkOrigin(request);
     const actor = await currentUser();
     if (Number(request.headers.get("content-length")) > MAX_FILE + 100000)
-      throw new Error("Upload exceeds 10 MB");
+      throw new Error("Upload exceeds 4 MB");
     const data = await limitedForm(request, MAX_FILE + 100000);
     const grantId = String(data.get("grantId"));
     const stageId = String(data.get("stageId"));
-    const grant = editable(grantId, actor);
+    const grant = await editable(grantId, actor);
     if (!grant.stages.some((s) => s.id === stageId))
       throw new Error("Invalid stage");
     const file = data.get("file");
@@ -27,30 +27,30 @@ export async function POST(request: Request) {
     const ext = validateFile(buffer, file.name);
     const docId = id();
     const filename = docId + ext;
-    await mkdir(uploadRoot(), { recursive: true });
-    filePath = path.join(uploadRoot(), filename);
-    await writeFile(filePath, buffer, { flag: "wx", mode: 0o600 });
-    db.transaction(() => {
-      db.insert(documents)
-        .values({
-          id: docId,
-          grantId,
-          stageId,
-          name: path
-            .basename(file.name)
-            .replace(/[\r\n]/g, "")
-            .slice(0, 200),
-          path: filename,
-          size: buffer.length,
-          createdBy: actor.id,
-          createdAt: now(),
-        })
-        .run();
-      audit(actor, grantId, "Document uploaded", { name: file.name, stageId });
+    filePath = filename;
+    await putFile(filePath, buffer);
+    await transaction(async () => {
+      await db.insert(documents).values({
+        id: docId,
+        grantId,
+        stageId,
+        name: path
+          .basename(file.name)
+          .replace(/[\r\n]/g, "")
+          .slice(0, 200),
+        path: filename,
+        size: buffer.length,
+        createdBy: actor.id,
+        createdAt: now(),
+      });
+      await audit(actor, grantId, "Document uploaded", {
+        name: file.name,
+        stageId,
+      });
     });
     return NextResponse.json({ ok: true });
   } catch (e) {
-    if (filePath) await unlink(filePath).catch(() => {});
+    if (filePath) await deleteFile(filePath).catch(() => {});
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Upload failed" },
       { status: 400 },
@@ -58,17 +58,26 @@ export async function POST(request: Request) {
   }
 }
 export async function GET(request: Request) {
-  await currentUser();
-  const doc = db
-    .select()
-    .from(documents)
-    .where(eq(documents.id, new URL(request.url).searchParams.get("id") || ""))
-    .get();
+  try {
+    await currentUser();
+  } catch {
+    return Response.json(
+      { error: "Unauthorized: sign in to continue" },
+      { status: 401 },
+    );
+  }
+  const doc = (
+    await db
+      .select()
+      .from(documents)
+      .where(
+        eq(documents.id, new URL(request.url).searchParams.get("id") || ""),
+      )
+      .limit(1)
+  )[0];
   if (!doc?.path) return new Response("Not found", { status: 404 });
-  const buffer = await readFile(
-    path.join(uploadRoot(), path.basename(doc.path)),
-  );
-  return new Response(buffer, {
+  const buffer = await readStoredFile(doc.path);
+  return new Response(Uint8Array.from(buffer), {
     headers: {
       "Content-Type": "application/octet-stream",
       "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(doc.name)}`,

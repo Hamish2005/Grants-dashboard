@@ -333,7 +333,7 @@ export function NewGrant({
           </p>
           <div className="help">
             Use grant-level documents only. Do not upload HMIS records or
-            personal client information. Maximum 10 MB; 500 spreadsheet rows;
+            personal client information. Maximum 4 MB; 500 spreadsheet rows;
             PDF, DOCX, XLSX, CSV.
           </div>
           <div

@@ -25,7 +25,7 @@ import type { References } from "./tracker";
 import type * as s from "@/lib/db/schema";
 import type { Actor } from "@/lib/auth";
 type Props = {
-  grant: ReturnType<typeof getGrant>;
+  grant: Awaited<ReturnType<typeof getGrant>>;
   refs: References;
   user: Actor;
   comments: (typeof s.comments.$inferSelect)[];
@@ -731,7 +731,7 @@ export function GrantDetail({
                   }
                 }}
               >
-                <Field label="Upload PDF, DOCX, XLSX, or CSV (10 MB maximum)">
+                <Field label="Upload PDF, DOCX, XLSX, or CSV (4 MB maximum)">
                   <input
                     type="file"
                     name="file"

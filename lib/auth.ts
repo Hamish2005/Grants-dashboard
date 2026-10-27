@@ -15,7 +15,14 @@ export async function currentUser(): Promise<Actor> {
     process.env.NODE_ENV !== "production"
   )
     id = process.env.DEV_USER_ID || "alex";
-  else if (process.env.AUTH_MODE === "proxy") {
+  else if (process.env.AUTH_MODE === "entra") {
+    const { entraSettings } = await import("./entra");
+    if (!entraSettings()) throw new Error("Authentication is not configured");
+    const { auth } = await import("../auth");
+    const session = await auth();
+    id = session?.user?.id;
+    if (!id) throw new Error("Unauthorized: sign in to continue");
+  } else if (process.env.AUTH_MODE === "proxy") {
     const secret = process.env.AUTH_JWT_SECRET;
     if (!secret || secret.length < 32)
       throw new Error("Authentication is not configured");
@@ -41,9 +48,9 @@ export async function currentUser(): Promise<Actor> {
       "Authentication required. Development authentication is disabled in production.",
     );
   const user = id
-    ? db.select().from(users).where(eq(users.id, id)).get()
+    ? (await db.select().from(users).where(eq(users.id, id)).limit(1))[0]
     : undefined;
-  if (!user)
+  if (!user || !["Admin", "Manager", "Staff"].includes(user.role))
     throw new Error("Unauthorized: staff account has not been provisioned");
   return user;
 }

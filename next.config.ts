@@ -1,9 +1,12 @@
 import type { NextConfig } from "next";
 const config: NextConfig = {
-  serverExternalPackages: ["better-sqlite3", "pdf-parse", "mammoth", "exceljs"],
+  distDir: process.env.NEXT_DIST_DIR || ".next",
+  serverExternalPackages: ["pg", "pdf-parse", "mammoth", "exceljs"],
   poweredByHeader: false,
   devIndicators: false,
-  outputFileTracingExcludes: { '*': ['./data/**/*', './.env*', './test-results/**/*'] },
+  outputFileTracingExcludes: {
+    "*": ["./data/**/*", "./.env*", "./test-results/**/*"],
+  },
   async headers() {
     return [
       {

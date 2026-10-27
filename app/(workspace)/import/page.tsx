@@ -1,13 +1,13 @@
-import { currentUser } from "@/lib/auth";
+import { requireUser } from "@/lib/require-user";
 import { listGrants, referenceData } from "@/lib/grants";
 import { NewGrant } from "@/components/new-grant";
 export default async function Page() {
-  const user = await currentUser();
+  const user = await requireUser();
   return (
     <NewGrant
-      refs={referenceData()}
+      refs={await referenceData()}
       userId={user.id}
-      grants={listGrants()}
+      grants={await listGrants()}
       initialTab="bulk"
     />
   );

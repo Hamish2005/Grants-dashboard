@@ -1,4 +1,4 @@
-import { db } from "./index";
+import { db, transaction } from "./index";
 import * as s from "./schema";
 import { createGrant, addComment, updateStage } from "../grants";
 import { addDays, today } from "../utils";
@@ -66,43 +66,50 @@ const active: Stage[] = [
   ["Closeout", 60, "Grants / Finance"],
   ["Closed", null, "Grants & Contracts"],
 ];
-export function seed(includeDemo = true) {
-  if (db.select().from(s.users).all().length) return;
-  db.transaction(() => {
-    db.insert(s.users)
-      .values([
-        {
-          id: "alex",
-          name: "Alex Morgan",
-          email: "alex@example.invalid",
-          role: "Admin",
-          team: "Grants & Contracts",
-        },
-        {
-          id: "jordan",
-          name: "Jordan Lee",
-          email: "jordan@example.invalid",
-          role: "Manager",
-          team: "Grants Compliance / Program Lead",
-        },
-        {
-          id: "sam",
-          name: "Sam Rivera",
-          email: "sam@example.invalid",
-          role: "Staff",
-          team: "Grants Specialist",
-        },
-        {
-          id: "casey",
-          name: "Casey Chen",
-          email: "casey@example.invalid",
-          role: "Manager",
-          team: "Grants & Contracts / Finance",
-        },
-      ])
-      .run();
+export async function seed(
+  includeDemo = true,
+  administrator?: typeof s.users.$inferInsert,
+) {
+  await transaction(async () => {
+    if ((await db.select().from(s.users)).length) return;
+    if (administrator && includeDemo)
+      throw new Error("Production bootstrap cannot include demo grants");
+    await db.insert(s.users).values(
+      administrator
+        ? [administrator]
+        : [
+            {
+              id: "alex",
+              name: "Alex Morgan",
+              email: "alex@example.invalid",
+              role: "Admin",
+              team: "Grants & Contracts",
+            },
+            {
+              id: "jordan",
+              name: "Jordan Lee",
+              email: "jordan@example.invalid",
+              role: "Manager",
+              team: "Grants Compliance / Program Lead",
+            },
+            {
+              id: "sam",
+              name: "Sam Rivera",
+              email: "sam@example.invalid",
+              role: "Staff",
+              team: "Grants Specialist",
+            },
+            {
+              id: "casey",
+              name: "Casey Chen",
+              email: "casey@example.invalid",
+              role: "Manager",
+              team: "Grants & Contracts / Finance",
+            },
+          ],
+    );
     for (const name of ["HHAP", "CoC", "YHDP", "Other"])
-      db.insert(s.programs).values({ id: name, name }).run();
+      await db.insert(s.programs).values({ id: name, name });
     for (const [key, name, stages] of [
       ["hhap", "HHAP Strategic Investment", hh],
       ["coc", "HUD CoC NOFO", coc],
@@ -117,23 +124,23 @@ export function seed(includeDemo = true) {
         ],
       ],
     ] as [string, string, Stage[]][]) {
-      db.insert(s.templates)
-        .values({
-          id: key,
-          name,
-          description:
-            key === "hhap"
-              ? "Based on the August 2026 RFP. Editable calendar-day planning estimates, not universal requirements. Implementation is contract-dependent, up to 24 months; closeout estimate 30–90 days."
-              : key === "coc"
-                ? "Planning guidance from the supplied brief; linked 2026 timeline could not be verified. HUD decision timing remains unknown."
-                : "Set dates and reporting obligations from the executed agreement.",
-        })
-        .run();
-      stages.forEach(
-        ([name, duration, role, externalParty, optional, decision], position) =>
-          db
-            .insert(s.templateStages)
-            .values({
+      await db.insert(s.templates).values({
+        id: key,
+        name,
+        description:
+          key === "hhap"
+            ? "Based on the August 2026 RFP. Editable calendar-day planning estimates, not universal requirements. Implementation is contract-dependent, up to 24 months; closeout estimate 30–90 days."
+            : key === "coc"
+              ? "Planning guidance from the supplied brief; linked 2026 timeline could not be verified. HUD decision timing remains unknown."
+              : "Set dates and reporting obligations from the executed agreement.",
+      });
+      await (async () => {
+        for (const [index, value] of stages.entries())
+          await (async (
+            [name, duration, role, externalParty, optional, decision],
+            position,
+          ) =>
+            await db.insert(s.templateStages).values({
               id: `${key}-${position}`,
               templateId: key,
               position,
@@ -146,35 +153,33 @@ export function seed(includeDemo = true) {
               externalParty: externalParty || null,
               optional: !!optional,
               decision: !!decision,
-              defaultOwnerId:
-                role === "Grants Specialist"
+              defaultOwnerId: administrator
+                ? null
+                : role === "Grants Specialist"
                   ? "sam"
                   : role.includes("Finance")
                     ? "casey"
                     : role.includes("Program Lead")
                       ? "jordan"
                       : null,
-            })
-            .run(),
-      );
+            }))(value, index);
+      })();
     }
     if (!includeDemo) return;
-    db.insert(s.cycles)
-      .values([
-        {
-          id: "demo-hhap",
-          name: "2026 Strategic Investment · Demo",
-          programId: "HHAP",
-        },
-        {
-          id: "demo-coc",
-          name: "2026 CoC competition · Demo",
-          programId: "CoC",
-        },
-        { id: "demo-yhdp", name: "Youth housing · Demo", programId: "YHDP" },
-      ])
-      .run();
-    const actor = db.select().from(s.users).get()!;
+    await db.insert(s.cycles).values([
+      {
+        id: "demo-hhap",
+        name: "2026 Strategic Investment · Demo",
+        programId: "HHAP",
+      },
+      {
+        id: "demo-coc",
+        name: "2026 CoC competition · Demo",
+        programId: "CoC",
+      },
+      { id: "demo-yhdp", name: "Youth housing · Demo", programId: "YHDP" },
+    ]);
+    const actor = (await db.select().from(s.users).limit(1))[0]!;
     const demos = [
       [
         "Harbor Bridge Housing",
@@ -249,69 +254,68 @@ export function seed(includeDemo = true) {
         20,
       ],
     ] as const;
-    demos.forEach(
-      (
-        [
-          name,
-          programId,
-          templateId,
-          startingPosition,
-          managerId,
-          organization,
-          days,
-        ],
-        i,
-      ) => {
-        const grantId = createGrant(
-          {
+    await (async () => {
+      for (const [index, value] of demos.entries())
+        await (async (
+          [
             name,
             programId,
             templateId,
             startingPosition,
             managerId,
             organization,
-            cycleId:
-              programId === "Other" ? null : `demo-${programId.toLowerCase()}`,
-            externalId: `DEMO-${1001 + i}`,
-            requested: (350000 + i * 75000) * 100,
-            awarded: i % 2 === 0 ? (300000 + i * 50000) * 100 : null,
-          },
-          actor,
-          true,
-        );
-        const stage = db
-          .select()
-          .from(s.stages)
-          .all()
-          .find(
+            days,
+          ],
+          i,
+        ) => {
+          const grantId = await createGrant(
+            {
+              name,
+              programId,
+              templateId,
+              startingPosition,
+              managerId,
+              organization,
+              cycleId:
+                programId === "Other"
+                  ? null
+                  : `demo-${programId.toLowerCase()}`,
+              externalId: `DEMO-${1001 + i}`,
+              requested: (350000 + i * 75000) * 100,
+              awarded: i % 2 === 0 ? (300000 + i * 50000) * 100 : null,
+            },
+            actor,
+            true,
+          );
+          const stage = (await db.select().from(s.stages)).find(
             (x) => x.grantId === grantId && x.position === startingPosition,
           )!;
-        updateStage(
-          grantId,
-          {
-            ownerId: managerId,
-            externalParty: stage.externalParty,
-            duration: stage.duration,
-            plannedStart: null,
-            deadline: days === null ? null : addDays(today(), days),
-            estimated: true,
-            status: i === 2 ? "Blocked" : "In Progress",
-          },
-          actor,
-        );
-        addComment(
-          grantId,
-          stage.id,
-          [
-            "Budget review is underway. Finance will confirm the final scope.",
-            "Materials shared with the independent committee for review.",
-            "Waiting for the recipient’s revised reporting schedule.",
-            "Awaiting an external decision. No announcement date assumed.",
-          ][i % 4],
-          "Update",
-          actor,
-        );
-      },
-    );
+          await updateStage(
+            grantId,
+            {
+              ownerId: managerId,
+              externalParty: stage.externalParty,
+              duration: stage.duration,
+              plannedStart: null,
+              deadline: days === null ? null : addDays(today(), days),
+              estimated: true,
+              status: i === 2 ? "Blocked" : "In Progress",
+            },
+            actor,
+          );
+          await addComment(
+            grantId,
+            stage.id,
+            [
+              "Budget review is underway. Finance will confirm the final scope.",
+              "Materials shared with the independent committee for review.",
+              "Waiting for the recipient’s revised reporting schedule.",
+              "Awaiting an external decision. No announcement date assumed.",
+            ][i % 4],
+            "Update",
+            actor,
+          );
+        })(value, index);
+    })();
   });
 }

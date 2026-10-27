@@ -6,129 +6,158 @@ import os from "node:os";
 import { eq } from "drizzle-orm";
 import { zipSync, strToU8 } from "fflate";
 import ExcelJS from "exceljs";
-
 test("Persistent grants, workflows, authorization and imports", async (t) => {
   const temp = mkdtempSync(path.join(os.tmpdir(), "rtfh-tests-"));
-  process.env.DATABASE_PATH = path.join(temp, "test.sqlite");
+  Object.assign(process.env, { NODE_ENV: "test", STORAGE_DRIVER: "local" });
   process.env.UPLOAD_DIR = path.join(temp, "uploads");
-  const { db, migrate, sqlite } = await import("../lib/db");
+  const { db } = await import("../lib/db");
+  const { migrate } = await import("../lib/db/migrate");
+  const { testDatabase } = await import("./helpers/database");
+  const engine = await testDatabase();
   const s = await import("../lib/db/schema");
   const svc = await import("../lib/grants");
   const imports = await import("../lib/imports");
   const { seed } = await import("../lib/db/seed");
-  migrate();
-  seed(false);
-  const actor = db.select().from(s.users).where(eq(s.users.id, "alex")).get()!;
-  const staff = db.select().from(s.users).where(eq(s.users.id, "sam")).get()!;
-  const make = (extra: Record<string, unknown> = {}) =>
-    svc.createGrant(
-      {
-        name: "Fictional test project",
-        templateId: "hhap",
-        managerId: "alex",
-        programId: "HHAP",
-        ...extra,
-      },
-      actor,
-    );
   try {
+    await migrate();
+    await seed(false);
+    const actor = (
+      await db.select().from(s.users).where(eq(s.users.id, "alex")).limit(1)
+    )[0]!;
+    const staff = (
+      await db.select().from(s.users).where(eq(s.users.id, "sam")).limit(1)
+    )[0]!;
+    const make = async (extra: Record<string, unknown> = {}) =>
+      await svc.createGrant(
+        {
+          name: "Fictional test project",
+          templateId: "hhap",
+          managerId: "alex",
+          programId: "HHAP",
+          ...extra,
+        },
+        actor,
+      );
     await t.test(
       "quick add persists a normalized workflow with distinct external decision maker",
-      () => {
-        const id = make();
-        const g = svc.getGrant(id);
+      async () => {
+        const id = await make();
+        const g = await svc.getGrant(id);
         assert.equal(g.stages.length, 13);
         assert.equal(g.current.status, "In Progress");
         assert.equal(g.stages[3].externalParty, "Independent Review Committee");
         assert.equal(g.stages[3].ownerId, "alex");
         assert.equal(g.stages[2].ownerId, "sam");
-        assert.ok(existsSync(process.env.DATABASE_PATH!));
+        assert.ok(g.id);
         assert.equal(g.requested, null);
       },
     );
     await t.test(
       "invalid inputs and duplicate IDs do not leave partial grants",
-      () => {
-        const before = svc.listGrants().length;
-        assert.throws(() => make({ name: "" }));
-        assert.throws(() => make({ startingPosition: 99 }));
-        assert.throws(() => make({ startDate: "2026-02-30" }));
-        assert.equal(svc.listGrants().length, before);
-        make({ externalId: "TEST-001" });
-        assert.throws(() => make({ externalId: "TEST-001" }), /Duplicate/);
-        assert.equal(imports.duplicates({ externalId: "TEST-001" }).length, 1);
+      async () => {
+        const before = (await svc.listGrants()).length;
+        await assert.rejects(async () => await make({ name: "" }));
+        await assert.rejects(async () => await make({ startingPosition: 99 }));
+        await assert.rejects(
+          async () => await make({ startDate: "2026-02-30" }),
+        );
+        assert.equal((await svc.listGrants()).length, before);
+        await make({ externalId: "TEST-001" });
+        await assert.rejects(
+          async () => await make({ externalId: "TEST-001" }),
+          /Duplicate/,
+        );
+        assert.equal(
+          (await imports.duplicates({ externalId: "TEST-001" })).length,
+          1,
+        );
       },
     );
-    await t.test("advance records completion and activates next stage", () => {
-      const id = make({ startingPosition: 2 });
-      const before = svc.getGrant(id);
-      svc.advanceGrant(id, actor);
-      const after = svc.getGrant(id);
-      assert.equal(after.currentPosition, 3);
-      assert.equal(after.current.status, "In Progress");
-      assert.ok(after.stages[2].completedAt);
-      assert.equal(after.stages[0].completedAt, null);
-      assert.equal(before.stages[0].status, "Skipped");
-      assert.ok(after.current.deadline);
-    });
+    await t.test(
+      "advance records completion and activates next stage",
+      async () => {
+        const id = await make({ startingPosition: 2 });
+        const before = await svc.getGrant(id);
+        await svc.advanceGrant(id, actor);
+        const after = await svc.getGrant(id);
+        assert.equal(after.currentPosition, 3);
+        assert.equal(after.current.status, "In Progress");
+        assert.ok(after.stages[2].completedAt);
+        assert.equal(after.stages[0].completedAt, null);
+        assert.equal(before.stages[0].status, "Skipped");
+        assert.ok(after.current.deadline);
+      },
+    );
     await t.test(
       "conditional appeals require a choice and retain a skip reason",
-      () => {
-        const id = make({ startingPosition: 4 });
-        assert.throws(() => svc.advanceGrant(id, actor), /appeal/);
-        svc.advanceGrant(id, actor, { appeals: false });
-        const g = svc.getGrant(id);
+      async () => {
+        const id = await make({ startingPosition: 4 });
+        await assert.rejects(
+          async () => await svc.advanceGrant(id, actor),
+          /appeal/,
+        );
+        await svc.advanceGrant(id, actor, { appeals: false });
+        const g = await svc.getGrant(id);
         assert.equal(g.currentPosition, 6);
         assert.equal(g.stages[5].status, "Skipped");
         assert.equal(g.stages[5].skipReason, "No appeal required");
-        const appeal = make({ startingPosition: 4 });
-        svc.advanceGrant(appeal, actor, { appeals: true });
-        assert.equal(svc.getGrant(appeal).currentPosition, 5);
-        assert.throws(
-          () => svc.advanceGrant(appeal, actor, { skip: true }),
+        const appeal = await make({ startingPosition: 4 });
+        await svc.advanceGrant(appeal, actor, { appeals: true });
+        assert.equal((await svc.getGrant(appeal)).currentPosition, 5);
+        await assert.rejects(
+          async () => await svc.advanceGrant(appeal, actor, { skip: true }),
           /reason/,
         );
-        svc.advanceGrant(appeal, actor, {
+        await svc.advanceGrant(appeal, actor, {
           skip: true,
           reason: "Appeal withdrawn",
         });
         assert.equal(
-          svc.getGrant(appeal).stages[5].skipReason,
+          (await svc.getGrant(appeal)).stages[5].skipReason,
           "Appeal withdrawn",
         );
       },
     );
     await t.test(
       "not-selected applications never enter contracting, including CoC",
-      () => {
+      async () => {
         for (const [templateId, startingPosition] of [
           ["hhap", 6],
           ["coc", 11],
         ] as const) {
-          const id = make({ templateId, startingPosition });
-          assert.throws(() => svc.advanceGrant(id, actor), /decision/);
-          svc.advanceGrant(id, actor, { decision: "Not Selected" });
-          const g = svc.getGrant(id);
+          const id = await make({ templateId, startingPosition });
+          await assert.rejects(
+            async () => await svc.advanceGrant(id, actor),
+            /decision/,
+          );
+          await svc.advanceGrant(id, actor, { decision: "Not Selected" });
+          const g = await svc.getGrant(id);
           assert.equal(g.status, "Not Selected");
           assert.ok(
             g.stages
               .slice(startingPosition + 1)
               .every((s) => s.status === "Skipped" && !s.actualStart),
           );
-          assert.throws(() => svc.advanceGrant(id, actor), /active/);
+          await assert.rejects(
+            async () => await svc.advanceGrant(id, actor),
+            /active/,
+          );
         }
       },
     );
-    await t.test("selected decision proceeds to contract development", () => {
-      const id = make({ startingPosition: 6 });
-      svc.advanceGrant(id, actor, { decision: "Selected" });
-      assert.equal(svc.getGrant(id).currentPosition, 7);
-    });
+    await t.test(
+      "selected decision proceeds to contract development",
+      async () => {
+        const id = await make({ startingPosition: 6 });
+        await svc.advanceGrant(id, actor, { decision: "Selected" });
+        assert.equal((await svc.getGrant(id)).currentPosition, 7);
+      },
+    );
     await t.test(
       "blocking, unblocking, ownership and deadline recalculation preserve history",
-      () => {
-        const id = make({ startingPosition: 2 });
-        const g = svc.getGrant(id);
+      async () => {
+        const id = await make({ startingPosition: 2 });
+        const g = await svc.getGrant(id);
         const data = {
           ownerId: "sam",
           externalParty: null,
@@ -139,65 +168,87 @@ test("Persistent grants, workflows, authorization and imports", async (t) => {
           status: "Blocked",
           recalculate: true,
         };
-        svc.updateStage(id, data, actor);
-        assert.equal(svc.getGrant(id).current.deadline, "2026-10-04");
-        assert.throws(() => svc.advanceGrant(id, actor), /blocker/);
-        svc.updateStage(id, { ...data, status: "In Progress" }, staff);
-        const after = svc.getGrant(id);
+        await svc.updateStage(id, data, actor);
+        assert.equal((await svc.getGrant(id)).current.deadline, "2026-10-04");
+        await assert.rejects(
+          async () => await svc.advanceGrant(id, actor),
+          /blocker/,
+        );
+        await svc.updateStage(id, { ...data, status: "In Progress" }, staff);
+        const after = await svc.getGrant(id);
         assert.equal(after.stages[3].deadline, "2026-10-09");
         assert.equal(after.stages[0].deadline, g.stages[0].deadline);
-        svc.advanceGrant(id, staff);
-        assert.equal(svc.getGrant(id).stages[2].deadline, "2026-10-04");
+        await svc.advanceGrant(id, staff);
+        assert.equal((await svc.getGrant(id)).stages[2].deadline, "2026-10-04");
       },
     );
-    await t.test("comments and audit history survive transitions", () => {
-      const id = make({ startingPosition: 2 });
-      const stage = svc.getGrant(id).current.id;
-      svc.addComment(id, stage, "Review complete.", "Update", staff);
-      svc.addComment(id, stage, "Supporting note retained.", "Decision", actor);
-      svc.advanceGrant(id, actor);
+    await t.test("comments and audit history survive transitions", async () => {
+      const id = await make({ startingPosition: 2 });
+      const stage = (await svc.getGrant(id)).current.id;
+      await svc.addComment(id, stage, "Review complete.", "Update", staff);
+      await svc.addComment(
+        id,
+        stage,
+        "Supporting note retained.",
+        "Decision",
+        actor,
+      );
+      await svc.advanceGrant(id, actor);
       assert.equal(
-        db.select().from(s.comments).where(eq(s.comments.stageId, stage)).all()
-          .length,
+        (
+          await db
+            .select()
+            .from(s.comments)
+            .where(eq(s.comments.stageId, stage))
+        ).length,
         2,
       );
       assert.equal(
-        svc.listGrants().find((g) => g.id === id)?.latest?.text,
+        (await svc.listGrants()).find((g) => g.id === id)?.latest?.text,
         "Supporting note retained.",
       );
       assert.ok(
-        db.select().from(s.auditLogs).where(eq(s.auditLogs.grantId, id)).all()
+        (await db.select().from(s.auditLogs).where(eq(s.auditLogs.grantId, id)))
           .length >= 4,
       );
     });
     await t.test(
       "paused funding cycles and grant holds prevent transitions",
-      () => {
-        db.insert(s.cycles)
-          .values({ id: "pause-test", name: "Test cycle", programId: "HHAP" })
-          .run();
-        const id = make({ cycleId: "pause-test" });
-        svc.pauseCycle("pause-test", true, actor);
-        assert.throws(() => svc.advanceGrant(id, actor), /paused/);
-        svc.pauseCycle("pause-test", false, actor);
-        svc.setHold(id, true, actor);
-        assert.throws(() => svc.advanceGrant(id, actor), /active/);
-        svc.setHold(id, false, actor);
-        svc.advanceGrant(id, actor);
-        assert.equal(svc.getGrant(id).currentPosition, 1);
+      async () => {
+        await db
+          .insert(s.cycles)
+          .values({ id: "pause-test", name: "Test cycle", programId: "HHAP" });
+        const id = await make({ cycleId: "pause-test" });
+        await svc.pauseCycle("pause-test", true, actor);
+        await assert.rejects(
+          async () => await svc.advanceGrant(id, actor),
+          /paused/,
+        );
+        await svc.pauseCycle("pause-test", false, actor);
+        await svc.setHold(id, true, actor);
+        await assert.rejects(
+          async () => await svc.advanceGrant(id, actor),
+          /active/,
+        );
+        await svc.setHold(id, false, actor);
+        await svc.advanceGrant(id, actor);
+        assert.equal((await svc.getGrant(id)).currentPosition, 1);
       },
     );
     await t.test(
       "staff cannot modify unassigned grants or pause cycles",
-      () => {
-        const id = make();
-        assert.throws(() => svc.advanceGrant(id, staff), /Forbidden/);
-        assert.throws(
-          () => svc.updateGrant(id, { name: "Changed" }, staff),
+      async () => {
+        const id = await make();
+        await assert.rejects(
+          async () => await svc.advanceGrant(id, staff),
           /Forbidden/,
         );
-        assert.throws(
-          () => svc.pauseCycle("pause-test", true, staff),
+        await assert.rejects(
+          async () => await svc.updateGrant(id, { name: "Changed" }, staff),
+          /Forbidden/,
+        );
+        await assert.rejects(
+          async () => await svc.pauseCycle("pause-test", true, staff),
           /Forbidden/,
         );
       },
@@ -304,7 +355,7 @@ test("Persistent grants, workflows, authorization and imports", async (t) => {
         assert.throws(
           () =>
             imports.validateFile(Buffer.alloc(imports.MAX_FILE + 1), "big.csv"),
-          /10 MB/,
+          /4 MB/,
         );
         assert.throws(
           () => imports.validateFile(Buffer.from("bad"), "bad.docx"),
@@ -323,13 +374,13 @@ test("Persistent grants, workflows, authorization and imports", async (t) => {
     await t.test(
       "preview persists files but creates no grant until confirmation; duplicate skip/update counts",
       async () => {
-        const before = svc.listGrants().length;
+        const before = (await svc.listGrants()).length;
         const preview = await imports.previewUpload(
           Buffer.from("Grant name,Grant ID\nImported grant,IMPORT-1"),
           "import.csv",
           actor,
         );
-        assert.equal(svc.listGrants().length, before);
+        assert.equal((await svc.listGrants()).length, before);
         const row = {
           name: "Imported grant",
           externalId: "IMPORT-1",
@@ -349,18 +400,21 @@ test("Persistent grants, workflows, authorization and imports", async (t) => {
         assert.equal(counts.imported, 1);
         assert.equal(counts.skipped, 1);
         assert.equal(counts.errors.length, 1);
-        assert.equal(db.select().from(s.mappings).all().length, 1);
-        const g = db
-          .select()
-          .from(s.grants)
-          .where(eq(s.grants.externalId, "IMPORT-1"))
-          .get()!;
-        assert.equal(
-          db
+        assert.equal((await db.select().from(s.mappings)).length, 1);
+        const g = (
+          await db
             .select()
-            .from(s.documents)
-            .where(eq(s.documents.grantId, g.id))
-            .all().length,
+            .from(s.grants)
+            .where(eq(s.grants.externalId, "IMPORT-1"))
+            .limit(1)
+        )[0]!;
+        assert.equal(
+          (
+            await db
+              .select()
+              .from(s.documents)
+              .where(eq(s.documents.grantId, g.id))
+          ).length,
           1,
         );
         const p2 = await imports.previewUpload(
@@ -377,55 +431,66 @@ test("Persistent grants, workflows, authorization and imports", async (t) => {
           actor,
         );
         assert.equal(update.updated, 1);
-        assert.equal(svc.getGrant(g.id).name, "Updated imported grant");
-        assert.equal(svc.getGrant(g.id).stages.length, 7);
+        assert.equal((await svc.getGrant(g.id)).name, "Updated imported grant");
+        assert.equal((await svc.getGrant(g.id)).stages.length, 7);
       },
     );
     await t.test(
       "archiving removes a grant from the tracker without losing history",
-      () => {
-        const grantId = make();
-        const stage = svc.getGrant(grantId).current;
-        svc.addComment(grantId, stage.id, "Retained history", null, actor);
-        assert.throws(
-          () => svc.archiveGrant(grantId, true, staff),
+      async () => {
+        const grantId = await make();
+        const stage = (await svc.getGrant(grantId)).current;
+        await svc.addComment(
+          grantId,
+          stage.id,
+          "Retained history",
+          null,
+          actor,
+        );
+        await assert.rejects(
+          async () => await svc.archiveGrant(grantId, true, staff),
           /Forbidden/,
         );
-        svc.archiveGrant(grantId, true, actor);
+        await svc.archiveGrant(grantId, true, actor);
         assert.equal(
-          svc.listGrants().some((g) => g.id === grantId),
+          (await svc.listGrants()).some((g) => g.id === grantId),
           false,
         );
         assert.equal(
-          svc.listGrants(true).find((g) => g.id === grantId)?.archived,
+          (await svc.listGrants(true)).find((g) => g.id === grantId)?.archived,
           true,
         );
-        assert.throws(() => svc.advanceGrant(grantId, actor), /archived/);
-        svc.archiveGrant(grantId, false, actor);
-        assert.equal(svc.getGrant(grantId).current.id, stage.id);
+        await assert.rejects(
+          async () => await svc.advanceGrant(grantId, actor),
+          /archived/,
+        );
+        await svc.archiveGrant(grantId, false, actor);
+        assert.equal((await svc.getGrant(grantId)).current.id, stage.id);
         assert.equal(
-          db
-            .select()
-            .from(s.comments)
-            .where(eq(s.comments.stageId, stage.id))
-            .all().length,
+          (
+            await db
+              .select()
+              .from(s.comments)
+              .where(eq(s.comments.stageId, stage.id))
+          ).length,
           1,
         );
       },
     );
     await t.test(
       "stale stage requests cannot advance or edit the next stage",
-      () => {
-        const grantId = make();
-        const expectedStageId = svc.getGrant(grantId).current.id;
-        svc.advanceGrant(grantId, actor, { expectedStageId });
-        assert.throws(
-          () => svc.advanceGrant(grantId, actor, { expectedStageId }),
+      async () => {
+        const grantId = await make();
+        const expectedStageId = (await svc.getGrant(grantId)).current.id;
+        await svc.advanceGrant(grantId, actor, { expectedStageId });
+        await assert.rejects(
+          async () =>
+            await svc.advanceGrant(grantId, actor, { expectedStageId }),
           /already advanced/,
         );
-        assert.throws(
-          () =>
-            svc.updateStage(
+        await assert.rejects(
+          async () =>
+            await svc.updateStage(
               grantId,
               {
                 ownerId: "alex",
@@ -441,18 +506,18 @@ test("Persistent grants, workflows, authorization and imports", async (t) => {
             ),
           /another session/,
         );
-        assert.equal(svc.getGrant(grantId).currentPosition, 1);
+        assert.equal((await svc.getGrant(grantId)).currentPosition, 1);
       },
     );
     await t.test(
       "actual imported dates anchor future stages without shifting date-only deadlines",
       async () => {
-        const grantId = make({
+        const grantId = await make({
           applicationDeadline: "2026-11-01",
           startDate: "2027-01-01",
           endDate: "2028-12-31",
         });
-        const grant = svc.getGrant(grantId);
+        const grant = await svc.getGrant(grantId);
         assert.equal(grant.current.deadline, "2026-11-01");
         assert.equal(grant.current.estimated, false);
         assert.equal(grant.stages[8].deadline, "2027-01-01");
@@ -493,42 +558,44 @@ test("Persistent grants, workflows, authorization and imports", async (t) => {
       "work queues combine assigned stages and reporting tasks and exclude completed or archived work",
       async () => {
         const { listWorkItems } = await import("../lib/work-queue");
-        const grantId = make({ name: "Queue regression grant" });
-        const current = svc.getGrant(grantId).current;
+        const grantId = await make({ name: "Queue regression grant" });
+        const current = (await svc.getGrant(grantId)).current;
         const taskId = svc.id();
-        db.insert(s.tasks)
-          .values({
-            id: taskId,
-            grantId,
-            ownerId: "sam",
-            name: "Assigned reporting obligation",
-            deadline: "2026-11-01",
-          })
-          .run();
-        assert.ok(listWorkItems("alex").some((i) => i.id === current.id));
-        assert.ok(!listWorkItems("alex").some((i) => i.id === taskId));
+        await db.insert(s.tasks).values({
+          id: taskId,
+          grantId,
+          ownerId: "sam",
+          name: "Assigned reporting obligation",
+          deadline: "2026-11-01",
+        });
         assert.ok(
-          listWorkItems("sam").some(
+          (await listWorkItems("alex")).some((i) => i.id === current.id),
+        );
+        assert.ok(!(await listWorkItems("alex")).some((i) => i.id === taskId));
+        assert.ok(
+          (await listWorkItems("sam")).some(
             (i) => i.id === taskId && i.kind === "Reporting",
           ),
         );
-        assert.ok(!listWorkItems("sam").some((i) => i.id === current.id));
-        svc.setHold(grantId, true, actor);
         assert.ok(
-          listWorkItems()
+          !(await listWorkItems("sam")).some((i) => i.id === current.id),
+        );
+        await svc.setHold(grantId, true, actor);
+        assert.ok(
+          (await listWorkItems())
             .filter((i) => i.grantId === grantId)
             .every((i) => i.paused),
         );
-        svc.setHold(grantId, false, actor);
-        svc.advanceGrant(grantId, actor);
-        assert.ok(!listWorkItems().some((i) => i.id === current.id));
-        db.update(s.tasks)
+        await svc.setHold(grantId, false, actor);
+        await svc.advanceGrant(grantId, actor);
+        assert.ok(!(await listWorkItems()).some((i) => i.id === current.id));
+        await db
+          .update(s.tasks)
           .set({ completedAt: svc.now() })
-          .where(eq(s.tasks.id, taskId))
-          .run();
-        assert.ok(!listWorkItems().some((i) => i.id === taskId));
-        svc.archiveGrant(grantId, true, actor);
-        assert.ok(!listWorkItems().some((i) => i.grantId === grantId));
+          .where(eq(s.tasks.id, taskId));
+        assert.ok(!(await listWorkItems()).some((i) => i.id === taskId));
+        await svc.archiveGrant(grantId, true, actor);
+        assert.ok(!(await listWorkItems()).some((i) => i.grantId === grantId));
       },
     );
     await t.test("import tokens are actor-bound", async () => {
@@ -574,7 +641,7 @@ test("Persistent grants, workflows, authorization and imports", async (t) => {
       },
     );
   } finally {
-    sqlite.close();
+    await engine.close();
     assert.equal(path.dirname(path.resolve(temp)), path.resolve(os.tmpdir()));
     assert.ok(path.basename(temp).startsWith("rtfh-tests-"));
     rmSync(temp, { recursive: true, force: true });

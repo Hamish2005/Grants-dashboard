@@ -21,8 +21,8 @@ import { Button } from "./ui/button";
 import { Badge, Status, PageHeading, DemoNotice, Empty } from "./common";
 import { addDays, dateLabel, today } from "@/lib/utils";
 import type { listGrants, referenceData } from "@/lib/grants";
-export type GrantRow = ReturnType<typeof listGrants>[number];
-export type References = ReturnType<typeof referenceData>;
+export type GrantRow = Awaited<ReturnType<typeof listGrants>>[number];
+export type References = Awaited<ReturnType<typeof referenceData>>;
 export function Tracker({
   grants,
   users,

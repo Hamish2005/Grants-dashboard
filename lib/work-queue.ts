@@ -3,9 +3,9 @@ import { db } from "./db";
 import { tasks } from "./db/schema";
 import { listGrants, referenceData } from "./grants";
 import type { WorkItem } from "./work-items";
-export function listWorkItems(ownerId?: string): WorkItem[] {
-  const grants = listGrants();
-  const users = referenceData().users;
+export async function listWorkItems(ownerId?: string): Promise<WorkItem[]> {
+  const grants = await listGrants();
+  const users = (await referenceData()).users;
   const items: WorkItem[] = grants
     .filter(
       (g) =>
@@ -29,11 +29,10 @@ export function listWorkItems(ownerId?: string): WorkItem[] {
       demo: g.demo,
       intervalDays: null,
     }));
-  for (const task of db
+  for (const task of await db
     .select()
     .from(tasks)
-    .where(isNull(tasks.completedAt))
-    .all()) {
+    .where(isNull(tasks.completedAt))) {
     const grant = grants.find((g) => g.id === task.grantId);
     if (!grant) continue;
     items.push({

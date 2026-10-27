@@ -6,3 +6,6 @@ node_modules/
 *.tsbuildinfo
 *.log
 test-results/
+
+.next-e2e/
+.netlify/

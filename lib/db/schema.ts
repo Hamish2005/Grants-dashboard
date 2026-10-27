@@ -1,34 +1,36 @@
 import {
-  sqliteTable,
+  pgTable,
   text,
   integer,
+  boolean,
+  bigint,
   uniqueIndex,
-} from "drizzle-orm/sqlite-core";
-export const users = sqliteTable("users", {
+} from "drizzle-orm/pg-core";
+export const users = pgTable("users", {
   id: text().primaryKey(),
   name: text().notNull(),
   email: text().notNull().unique(),
   role: text().notNull(),
   team: text().notNull(),
 });
-export const programs = sqliteTable("programs", {
+export const programs = pgTable("programs", {
   id: text().primaryKey(),
   name: text().notNull(),
 });
-export const cycles = sqliteTable("cycles", {
+export const cycles = pgTable("cycles", {
   id: text().primaryKey(),
   name: text().notNull(),
   programId: text()
     .notNull()
     .references(() => programs.id),
-  paused: integer({ mode: "boolean" }).notNull().default(false),
+  paused: boolean().notNull().default(false),
 });
-export const templates = sqliteTable("templates", {
+export const templates = pgTable("templates", {
   id: text().primaryKey(),
   name: text().notNull(),
   description: text().notNull(),
 });
-export const templateStages = sqliteTable("template_stages", {
+export const templateStages = pgTable("template_stages", {
   id: text().primaryKey(),
   templateId: text()
     .notNull()
@@ -40,10 +42,10 @@ export const templateStages = sqliteTable("template_stages", {
   defaultOwnerId: text().references(() => users.id),
   externalParty: text(),
   duration: integer(),
-  optional: integer({ mode: "boolean" }).notNull().default(false),
-  decision: integer({ mode: "boolean" }).notNull().default(false),
+  optional: boolean().notNull().default(false),
+  decision: boolean().notNull().default(false),
 });
-export const grants = sqliteTable("grants", {
+export const grants = pgTable("grants", {
   id: text().primaryKey(),
   name: text().notNull(),
   programId: text()
@@ -55,8 +57,8 @@ export const grants = sqliteTable("grants", {
     .references(() => templates.id),
   organization: text(),
   externalId: text().unique(),
-  requested: integer(),
-  awarded: integer(),
+  requested: bigint({ mode: "number" }),
+  awarded: bigint({ mode: "number" }),
   managerId: text()
     .notNull()
     .references(() => users.id),
@@ -66,13 +68,13 @@ export const grants = sqliteTable("grants", {
   reporting: text(),
   milestones: text(),
   status: text().notNull().default("Active"),
-  archived: integer({ mode: "boolean" }).notNull().default(false),
+  archived: boolean().notNull().default(false),
   currentPosition: integer().notNull().default(0),
-  demo: integer({ mode: "boolean" }).notNull().default(false),
+  demo: boolean().notNull().default(false),
   createdAt: text().notNull(),
   updatedAt: text().notNull(),
 });
-export const stages = sqliteTable(
+export const stages = pgTable(
   "stages",
   {
     id: text().primaryKey(),
@@ -88,12 +90,12 @@ export const stages = sqliteTable(
       .references(() => users.id),
     externalParty: text(),
     duration: integer(),
-    optional: integer({ mode: "boolean" }).notNull().default(false),
-    decision: integer({ mode: "boolean" }).notNull().default(false),
+    optional: boolean().notNull().default(false),
+    decision: boolean().notNull().default(false),
     status: text().notNull().default("Not Started"),
     plannedStart: text(),
     deadline: text(),
-    estimated: integer({ mode: "boolean" }).notNull().default(true),
+    estimated: boolean().notNull().default(true),
     actualStart: text(),
     completedAt: text(),
     skipReason: text(),
@@ -104,7 +106,7 @@ export const stages = sqliteTable(
   },
   (t) => [uniqueIndex("stage_position").on(t.grantId, t.position)],
 );
-export const comments = sqliteTable("comments", {
+export const comments = pgTable("comments", {
   id: text().primaryKey(),
   stageId: text()
     .notNull()
@@ -116,7 +118,7 @@ export const comments = sqliteTable("comments", {
   indicator: text(),
   createdAt: text().notNull(),
 });
-export const documents = sqliteTable("documents", {
+export const documents = pgTable("documents", {
   id: text().primaryKey(),
   grantId: text()
     .notNull()
@@ -133,7 +135,7 @@ export const documents = sqliteTable("documents", {
     .references(() => users.id),
   createdAt: text().notNull(),
 });
-export const auditLogs = sqliteTable("audit_logs", {
+export const auditLogs = pgTable("audit_logs", {
   id: text().primaryKey(),
   grantId: text().references(() => grants.id),
   actorId: text()
@@ -143,7 +145,7 @@ export const auditLogs = sqliteTable("audit_logs", {
   details: text().notNull(),
   createdAt: text().notNull(),
 });
-export const tasks = sqliteTable("tasks", {
+export const tasks = pgTable("tasks", {
   id: text().primaryKey(),
   grantId: text()
     .notNull()
@@ -156,7 +158,7 @@ export const tasks = sqliteTable("tasks", {
   intervalDays: integer(),
   completedAt: text(),
 });
-export const mappings = sqliteTable("mappings", {
+export const mappings = pgTable("mappings", {
   id: text().primaryKey(),
   name: text().notNull().unique(),
   fields: text().notNull(),

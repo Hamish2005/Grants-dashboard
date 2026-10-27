@@ -2,7 +2,14 @@ import { currentUser } from "@/lib/auth";
 import { listGrants } from "@/lib/grants";
 import { csvCell } from "@/lib/imports";
 export async function GET() {
-  await currentUser();
+  try {
+    await currentUser();
+  } catch {
+    return Response.json(
+      { error: "Unauthorized: sign in to continue" },
+      { status: 401 },
+    );
+  }
   const fields = [
     "Grant name",
     "Funding program",
@@ -15,7 +22,7 @@ export async function GET() {
     "Deadline",
     "Status",
   ];
-  const rows = listGrants().map((g) => [
+  const rows = (await listGrants()).map((g) => [
     g.name,
     g.programId,
     g.organization,

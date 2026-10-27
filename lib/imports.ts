@@ -1,21 +1,18 @@
 import path from "node:path";
-import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
+import { putFile, readStoredFile, deleteFile } from "./storage";
+export { uploadRoot } from "./storage";
 import { randomUUID } from "node:crypto";
 import { parse } from "csv-parse/sync";
 import ExcelJS from "exceljs";
 import mammoth from "mammoth";
 import { unzipSync } from "fflate";
 import { eq } from "drizzle-orm";
-import { db } from "./db";
+import { db, transaction } from "./db";
 import * as s from "./db/schema";
 import { type Actor } from "./auth";
 import { audit, createGrant, id, now, updateGrant } from "./grants";
 import { grantInput } from "./validation";
-export const uploadRoot = () =>
-  path.resolve(
-    /* turbopackIgnore: true */ process.env.UPLOAD_DIR || "./data/uploads",
-  );
-export const MAX_FILE = 10 * 1024 * 1024;
+export const MAX_FILE = 4 * 1024 * 1024;
 export const importFields = [
   "name",
   "programId",
@@ -60,7 +57,7 @@ export function suggestMapping(headers: string[]) {
 }
 export function validateFile(buffer: Buffer, name: string) {
   if (!buffer.length || buffer.length > MAX_FILE)
-    throw new Error("Files must be between 1 byte and 10 MB");
+    throw new Error("Files must be between 1 byte and 4 MB");
   const ext = path.extname(name).toLowerCase();
   if (![".pdf", ".docx", ".xlsx", ".csv"].includes(ext))
     throw new Error("Allowed file types: PDF, DOCX, XLSX, CSV");
@@ -111,10 +108,23 @@ function scalar(v: unknown): string {
     if ("formula" in v)
       throw new Error("Formula cells are not accepted; export values as CSV");
     if ("richText" in v)
-      return (v as { richText: { text: string }[] }).richText
+      return (
+        v as {
+          richText: {
+            text: string;
+          }[];
+        }
+      ).richText
         .map((x) => x.text)
         .join("");
-    if ("text" in v) return String((v as { text: unknown }).text);
+    if ("text" in v)
+      return String(
+        (
+          v as {
+            text: unknown;
+          }
+        ).text,
+      );
   }
   return v == null ? "" : String(v);
 }
@@ -224,14 +234,11 @@ export function mappedRow(
   }
   return result;
 }
-export function duplicates(input: {
+export async function duplicates(input: {
   externalId?: string | null;
   name?: string;
 }) {
-  return db
-    .select()
-    .from(s.grants)
-    .all()
+  return (await db.select().from(s.grants))
     .filter((g) =>
       input.externalId
         ? g.externalId === input.externalId
@@ -257,7 +264,6 @@ export async function previewUpload(
 ) {
   const parsed = await extract(buffer, name);
   const token = randomUUID();
-  await mkdir(uploadRoot(), { recursive: true });
   const filePath = token + path.extname(name).toLowerCase();
   const preview: Preview = {
     ...parsed,
@@ -270,15 +276,13 @@ export async function previewUpload(
     path: filePath,
     size: buffer.length,
   };
-  await writeFile(path.join(uploadRoot(), filePath), buffer, {
-    flag: "wx",
-    mode: 0o600,
-  });
-  await writeFile(
-    path.join(uploadRoot(), token + ".json"),
-    JSON.stringify(preview),
-    { flag: "wx", mode: 0o600 },
-  );
+  await putFile(filePath, buffer);
+  try {
+    await putFile(token + ".json", JSON.stringify(preview));
+  } catch (error) {
+    await deleteFile(filePath).catch(() => {});
+    throw error;
+  }
   return { token, ...parsed };
 }
 export async function confirmImport(raw: unknown, actor: Actor) {
@@ -292,8 +296,10 @@ export async function confirmImport(raw: unknown, actor: Actor) {
       mapping: z.record(z.string(), z.string()).optional(),
     })
     .parse(raw);
-  const location = path.join(uploadRoot(), input.token + ".json");
-  const preview = JSON.parse(await readFile(location, "utf8")) as Preview;
+  const location = input.token + ".json";
+  const preview = JSON.parse(
+    (await readStoredFile(location)).toString("utf8"),
+  ) as Preview;
   if (
     preview.actorId !== actor.id ||
     Date.now() - preview.createdAt > 60 * 60 * 1000
@@ -303,93 +309,103 @@ export async function confirmImport(raw: unknown, actor: Actor) {
     imported: 0,
     updated: 0,
     skipped: 0,
-    errors: [] as { row: number; message: string }[],
+    errors: [] as {
+      row: number;
+      message: string;
+    }[],
   };
-  db.transaction(() => {
+  await transaction(async () => {
     if (
-      db
-        .select()
-        .from(s.auditLogs)
-        .where(eq(s.auditLogs.action, "Import " + input.token))
-        .get()
+      (
+        await db
+          .select()
+          .from(s.auditLogs)
+          .where(eq(s.auditLogs.action, "Import " + input.token))
+          .limit(1)
+      )[0]
     )
       throw new Error("This import was already confirmed");
-    input.rows.forEach((raw, i) => {
-      try {
-        db.transaction(() => {
-          const parsed = grantInput.parse(raw);
-          const match = parsed.externalId
-            ? db
-                .select()
-                .from(s.grants)
-                .where(eq(s.grants.externalId, parsed.externalId))
-                .get()
-            : null;
-          if (match && input.duplicateMode === "skip") {
-            counts.skipped++;
-            return;
-          }
-          let grantId: string;
-          let cycleId = parsed.cycleId;
-          if (typeof raw.cycle === "string" && raw.cycle.trim() && !cycleId) {
-            let c = db
-              .select()
-              .from(s.cycles)
-              .all()
-              .find(
-                (c) => c.name === raw.cycle && c.programId === parsed.programId,
-              );
-            if (!c) {
-              c = {
+    await (async () => {
+      for (const [index, value] of input.rows.entries())
+        await (async (raw, i) => {
+          try {
+            await transaction(async () => {
+              const parsed = grantInput.parse(raw);
+              const match = parsed.externalId
+                ? (
+                    await db
+                      .select()
+                      .from(s.grants)
+                      .where(eq(s.grants.externalId, parsed.externalId))
+                      .limit(1)
+                  )[0]
+                : null;
+              if (match && input.duplicateMode === "skip") {
+                counts.skipped++;
+                return;
+              }
+              let grantId: string;
+              let cycleId = parsed.cycleId;
+              if (
+                typeof raw.cycle === "string" &&
+                raw.cycle.trim() &&
+                !cycleId
+              ) {
+                let c = (await db.select().from(s.cycles)).find(
+                  (c) =>
+                    c.name === raw.cycle && c.programId === parsed.programId,
+                );
+                if (!c) {
+                  c = {
+                    id: id(),
+                    name: raw.cycle.trim().slice(0, 200),
+                    programId: parsed.programId,
+                    paused: false,
+                  };
+                  await db.insert(s.cycles).values(c);
+                }
+                cycleId = c.id;
+              }
+              if (match) {
+                const meaningful = Object.fromEntries(
+                  Object.entries(parsed).filter(
+                    ([, v]) => v !== null && v !== undefined && v !== "",
+                  ),
+                );
+                await updateGrant(
+                  match.id,
+                  { ...meaningful, cycleId: cycleId || match.cycleId },
+                  actor,
+                );
+                grantId = match.id;
+              } else grantId = await createGrant({ ...parsed, cycleId }, actor);
+              await db.insert(s.documents).values({
                 id: id(),
-                name: raw.cycle.trim().slice(0, 200),
-                programId: parsed.programId,
-                paused: false,
-              };
-              db.insert(s.cycles).values(c).run();
-            }
-            cycleId = c.id;
+                grantId,
+                name: preview.name,
+                path: preview.path,
+                size: preview.size,
+                createdBy: actor.id,
+                createdAt: now(),
+              });
+              await audit(actor, grantId, "Import confirmed", {
+                file: preview.name,
+                updated: !!match,
+              });
+              if (match) counts.updated++;
+              else counts.imported++;
+            });
+          } catch (error) {
+            counts.errors.push({
+              row: i + 1,
+              message: error instanceof Error ? error.message : "Invalid row",
+            });
           }
-          if (match) {
-            const meaningful = Object.fromEntries(
-              Object.entries(parsed).filter(
-                ([, v]) => v !== null && v !== undefined && v !== "",
-              ),
-            );
-            updateGrant(
-              match.id,
-              { ...meaningful, cycleId: cycleId || match.cycleId },
-              actor,
-            );
-            grantId = match.id;
-          } else grantId = createGrant({ ...parsed, cycleId }, actor);
-          db.insert(s.documents)
-            .values({
-              id: id(),
-              grantId,
-              name: preview.name,
-              path: preview.path,
-              size: preview.size,
-              createdBy: actor.id,
-              createdAt: now(),
-            })
-            .run();
-          audit(actor, grantId, "Import confirmed", {
-            file: preview.name,
-            updated: !!match,
-          });
-          if (match) counts.updated++;
-          else counts.imported++;
-        });
-      } catch (error) {
-        counts.errors.push({
-          row: i + 1,
-          message: error instanceof Error ? error.message : "Invalid row",
-        });
-      }
-    });
+        })(value, index);
+    })();
     if (input.mappingName && input.mapping)
-      db.insert(s.mappings)
+      await db
+        .insert(s.mappings)
         .values({
           id: id(),
           name: input.mappingName,
@@ -398,11 +414,12 @@ export async function confirmImport(raw: unknown, actor: Actor) {
         .onConflictDoUpdate({
           target: s.mappings.name,
           set: { fields: JSON.stringify(input.mapping) },
-        })
-        .run();
-    audit(actor, null, "Import " + input.token, counts);
+        });
+    await audit(actor, null, "Import " + input.token, counts);
   });
-  await unlink(location);
+  await deleteFile(location).catch(() =>
+    console.error("Committed import preview cleanup failed"),
+  );
   return counts;
 }
 export function csvCell(value: unknown) {

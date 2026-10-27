@@ -8,7 +8,7 @@ export async function POST(request: Request) {
     checkOrigin(request);
     const actor = await currentUser();
     if (Number(request.headers.get("content-length")) > MAX_FILE + 100000)
-      throw new Error("Upload exceeds 10 MB");
+      throw new Error("Upload exceeds 4 MB");
     if (request.headers.get("content-type")?.includes("application/json"))
       return NextResponse.json(
         await confirmImport(await limitedJson(request, MAX_FILE), actor),
@@ -26,7 +26,12 @@ export async function POST(request: Request) {
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "Import failed" },
-      { status: 400 },
+      {
+        status:
+          e instanceof Error && /^(Unauthorized|Authentication)/.test(e.message)
+            ? 401
+            : 400,
+      },
     );
   }
 }

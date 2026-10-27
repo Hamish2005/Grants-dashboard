@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { logout } from "@/app/login/actions";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import {
@@ -28,10 +29,12 @@ export function Shell({
   children,
   name,
   role,
+  canSignOut = false,
 }: {
   children: React.ReactNode;
   name: string;
   role: string;
+  canSignOut?: boolean;
 }) {
   const pathname = usePathname();
   return (
@@ -81,6 +84,13 @@ export function Shell({
               Internal workspace<small>San Diego Continuum of Care</small>
             </div>
           </div>
+          {canSignOut && (
+            <form action={logout}>
+              <button className="signout-button" type="submit">
+                Sign out
+              </button>
+            </form>
+          )}
           <div className="profile">
             <span className="avatar">
               {name

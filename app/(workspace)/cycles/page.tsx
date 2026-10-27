@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { currentUser } from "@/lib/auth";
+import { requireUser } from "@/lib/require-user";
 import { listGrants, referenceData } from "@/lib/grants";
 import { PageHeading, Badge } from "@/components/common";
 import { ActionButton } from "@/components/forms";
 import { money } from "@/lib/utils";
 export default async function Page() {
-  const user = await currentUser();
-  const grants = listGrants();
+  const user = await requireUser();
+  const grants = await listGrants();
   return (
     <>
       <PageHeading
@@ -14,7 +14,7 @@ export default async function Page() {
         description="Coordinate the portfolio while keeping each grant’s lifecycle separate."
       />
       <div className="template-grid">
-        {referenceData().cycles.map((c) => {
+        {(await referenceData()).cycles.map((c) => {
           const group = grants.filter((g) => g.cycleId === c.id);
           return (
             <section className="panel template-card" key={c.id}>

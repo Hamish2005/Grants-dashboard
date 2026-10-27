@@ -1,14 +1,14 @@
-import { currentUser } from "@/lib/auth";
+import { requireUser } from "@/lib/require-user";
 import { listWorkItems } from "@/lib/work-queue";
 import { WorkQueue } from "@/components/work-queue";
 import { today } from "@/lib/utils";
 export default async function Page() {
-  const user = await currentUser();
+  const user = await requireUser();
   return (
     <WorkQueue
-      key="tasks"
-      mode="tasks"
-      items={listWorkItems(user.id)}
+      key="deadlines"
+      mode="deadlines"
+      items={await listWorkItems()}
       userId={user.id}
       role={user.role}
       day={today()}

@@ -1533,3 +1533,57 @@ footer {
     grid-template-columns: 1fr;
   }
 }
+
+.login-panel {
+  width: min(100%, 460px);
+  padding: 40px;
+  display: grid;
+  gap: 20px;
+}
+.login-panel h1 {
+  font-size: 30px;
+  margin: 0;
+}
+.login-panel p {
+  margin: 0;
+  line-height: 1.6;
+}
+.login-panel small {
+  color: var(--muted-foreground);
+  line-height: 1.5;
+}
+.login-panel .eyebrow {
+  color: #0075c2;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.login-button {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: #0075c2;
+  color: white;
+  font-weight: 600;
+  padding: 13px 16px;
+  cursor: pointer;
+}
+.login-button:hover {
+  background: #005b96;
+}
+.login-notice {
+  background: #fff7df;
+  color: #604700;
+  padding: 14px;
+  border-radius: 8px;
+}
+.signout-button {
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 5px 10px;
+  margin-bottom: 12px;
+  background: transparent;
+}

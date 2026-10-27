@@ -3,6 +3,7 @@
   publish = ".next"
 
 [build.environment]
-  # These settings contain paths, an origin, a mode, and a development user ID.
-  # Keep scanning enabled for credentials, including AUTH_JWT_SECRET.
-  SECRETS_SCAN_OMIT_KEYS = "DATABASE_PATH,DEV_USER_ID,UPLOAD_DIR,APP_ORIGIN,AUTH_MODE"
+  NODE_VERSION = "24"
+  # Only non-secret paths, origins, mode/store names, and the development user ID.
+  # Keep scanning enabled for database URLs, client secrets, and signing keys.
+  SECRETS_SCAN_OMIT_KEYS = "DATABASE_PATH,DEV_USER_ID,UPLOAD_DIR,APP_ORIGIN,AUTH_URL,AUTH_MODE,STORAGE_DRIVER,BLOB_STORE_NAME"
