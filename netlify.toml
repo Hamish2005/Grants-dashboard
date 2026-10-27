@@ -1,0 +1,8 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # These settings contain paths, an origin, a mode, and a development user ID.
+  # Keep scanning enabled for credentials, including AUTH_JWT_SECRET.
+  SECRETS_SCAN_OMIT_KEYS = "DATABASE_PATH,DEV_USER_ID,UPLOAD_DIR,APP_ORIGIN,AUTH_MODE"

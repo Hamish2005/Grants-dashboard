@@ -13,6 +13,12 @@ All sensitive reads require a provisioned identity. The internal sharing model g
 
 The shared-secret JWT adapter is a gateway contract, not a completed Entra OIDC implementation. An actual gateway must validate the Entra issuer, tenant, tokens, callback state/nonce, and group membership, handle session lifecycle, and strip spoofed identity headers. Do not accept arbitrary Entra bearer tokens as this application's proxy token. Consider switching the gateway adapter to asymmetric JWKS verification in a future deployment to avoid sharing a signing secret with the app.
 
+## Netlify build configuration
+
+`netlify.toml` excludes only five non-secret configuration keys from Netlify's environment-value secret scan: `DATABASE_PATH`, `DEV_USER_ID`, `UPLOAD_DIR`, `APP_ORIGIN`, and `AUTH_MODE`. Their example values intentionally appear in source and documentation. Scanning remains enabled for credentials such as `AUTH_JWT_SECRET`; do not add credentials to this exception list. See [Netlify's secret scanning configuration](https://docs.netlify.com/build/environment-variables/secrets-controller/#configure-secret-scanning).
+
+This addresses the reported secret-scan build failure, but does not make the current app ready for Netlify's serverless runtime. The SQLite database and local uploads require durable storage, and production rejects development authentication. For the current implementation, use a persistent Node host with the identity gateway described above. A Netlify deployment requires the database and private file-storage migration described below, production identity integration, and `APP_ORIGIN` set to the actual deployed origin. Do not use temporary serverless disk as the operational database or enable development sign-in in production.
+
 ## Persistent storage
 
 Use one Node process with SQLite for the initial local installation. SQLite uses foreign keys, WAL mode, and a five-second busy timeout; mutations are transactions. Do not put an actively written SQLite database on OneDrive, Dropbox, SMB, or a shared network filesystem. Avoid multiple independently mounted serverless instances. Grant IDs, audit history, comments, and documents are persistent server data.
