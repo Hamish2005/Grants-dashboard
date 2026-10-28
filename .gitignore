@@ -9,3 +9,5 @@ test-results/
 
 .next-e2e/
 .netlify/
+
+/public/demo-assets/

@@ -1,7 +1,8 @@
 "use client";
+import { DownloadLink } from "./workspace-navigation";
 import { useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import Link from "./workspace-navigation";
+import { useRouter } from "./workspace-navigation";
 import {
   ArrowDownUp,
   ArrowRight,
@@ -143,10 +144,10 @@ export function Tracker({
         actions={
           <>
             <Button variant="outline" asChild>
-              <a href="/api/export">
+              <DownloadLink href="/api/export">
                 <Download size={16} />
                 Export
-              </a>
+              </DownloadLink>
             </Button>
             <Button asChild>
               <Link href="/grants/new">

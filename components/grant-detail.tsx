@@ -1,7 +1,9 @@
 "use client";
+import { DownloadLink } from "./workspace-navigation";
+import { workspaceFetch } from "@/lib/workspace-fetch";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { useRouter } from "./workspace-navigation";
+import Link from "./workspace-navigation";
 import {
   ArrowLeft,
   ArrowRight,
@@ -596,14 +598,14 @@ export function GrantDetail({
                         {documents
                           .filter((d) => d.commentId === c.id)
                           .map((d) => (
-                            <a
+                            <DownloadLink
                               className="document-row"
                               key={d.id}
                               href={`/api/documents?id=${d.id}`}
                             >
                               <Paperclip size={13} />
                               {d.name}
-                            </a>
+                            </DownloadLink>
                           ))}
                       </div>
                     </div>
@@ -623,7 +625,7 @@ export function GrantDetail({
                   setBusy(true);
                   setError("");
                   try {
-                    const response = await fetch("/api/comments", {
+                    const response = await workspaceFetch("/api/comments", {
                       method: "POST",
                       body: data,
                     });
@@ -678,7 +680,7 @@ export function GrantDetail({
               {documents.map((d) => (
                 <div className="document-row" key={d.id}>
                   <FileText size={17} />
-                  <a
+                  <DownloadLink
                     href={d.url || `/api/documents?id=${d.id}`}
                     target={d.url ? "_blank" : undefined}
                     rel="noreferrer"
@@ -689,7 +691,7 @@ export function GrantDetail({
                         "Imported grant document"}{" "}
                       · {timestamp(d.createdAt)}
                     </small>
-                  </a>
+                  </DownloadLink>
                   {d.url ? <ExternalLink size={13} /> : <Paperclip size={13} />}
                 </div>
               ))}
@@ -716,7 +718,7 @@ export function GrantDetail({
                     const form = new FormData(e.currentTarget);
                     form.set("grantId", g.id);
                     form.set("stageId", thread);
-                    const response = await fetch("/api/documents", {
+                    const response = await workspaceFetch("/api/documents", {
                       method: "POST",
                       body: form,
                     });

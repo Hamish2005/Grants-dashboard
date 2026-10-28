@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import Link from "next/link";
+import Link from "./workspace-navigation";
 import { Search, ArrowRight, CalendarDays, CheckSquare } from "lucide-react";
 import { matchesWorkView, type WorkItem } from "@/lib/work-items";
 import { dateLabel } from "@/lib/utils";

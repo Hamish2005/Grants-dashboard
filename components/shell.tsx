@@ -1,8 +1,8 @@
 "use client";
-import Link from "next/link";
+import Link from "./workspace-navigation";
 import { logout } from "@/app/login/actions";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname } from "./workspace-navigation";
 import {
   LayoutDashboard,
   Files,

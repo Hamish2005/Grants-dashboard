@@ -3,11 +3,8 @@ import { jwtVerify } from "jose";
 import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { users } from "./db/schema";
-export type Actor = typeof users.$inferSelect;
-export function requireRole(actor: Actor, roles: string[]) {
-  if (!roles.includes(actor.role))
-    throw new Error("Forbidden: your role cannot perform this action");
-}
+import type { Actor } from "./roles";
+export { type Actor, requireRole } from "./roles";
 export async function currentUser(): Promise<Actor> {
   let id: string | undefined;
   if (

@@ -1,6 +1,14 @@
 # RTFH Grants Workspace
 
-An internal grant lifecycle dashboard built with Next.js (App Router), TypeScript, Tailwind CSS, shadcn/ui-style Radix components, Drizzle ORM, PostgreSQL, and private Netlify Blobs storage. No external AI, browser localStorage, or live ZoomGrants/Dropbox integration is required. Hosted infrastructure is configured separately.
+An internal grant lifecycle dashboard built with Next.js (App Router), TypeScript, Tailwind CSS, shadcn/ui-style Radix components, Drizzle ORM, PostgreSQL, and private Netlify Blobs storage. No external AI or live ZoomGrants/Dropbox integration is required. The staff workspace uses hosted infrastructure; the public demo runs entirely in each tester?s browser.
+
+## Test the MVP without setup
+
+Open **[/demo](https://grant-dashboard.netlify.app/demo)** after deployment. No Microsoft account, PostgreSQL connection, or Blobs configuration is needed. Each browser gets eight fictional grants and its own workspace, saved locally using IndexedDB. Test grant creation, stages, comments, attachments, tasks, deadlines, cycles, templates, CSV import, and export. **Reset my demo** restores the samples and removes that browser?s edits and attachments.
+
+Use fictional information only. Changes are not shared between testers. Keep the demo in one tab; private browsing or clearing site data can remove your progress. CSV is the supported demo import format; PDF/DOCX/XLSX extraction requires the hosted workspace. Import source files are not attached automatically in the demo; attachments can be added in grant details. The first visit downloads the browser database assets and may take a few moments.
+
+To run just the demo locally: `npm ci`, `npm run dev`, then open `http://localhost:3000/demo`. No `.env` or database setup is needed. `npm run build` prepares the demo assets automatically. The production workspace and its APIs still require staff authentication.
 
 ## Run locally
 

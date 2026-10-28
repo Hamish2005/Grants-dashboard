@@ -1,9 +1,10 @@
 "use client";
+import { workspaceFetch } from "@/lib/workspace-fetch";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "./workspace-navigation";
 import { Button } from "./ui/button";
 export async function apiAction(body: Record<string, unknown>) {
-  const response = await fetch("/api/action", {
+  const response = await workspaceFetch("/api/action", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

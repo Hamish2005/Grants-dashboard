@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "./workspace-navigation";
 import { ArrowUp, ArrowDown, Plus, Trash2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Field, apiAction } from "./forms";

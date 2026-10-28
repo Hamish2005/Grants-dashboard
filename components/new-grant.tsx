@@ -1,7 +1,9 @@
 "use client";
+import { useDemo } from "./workspace-navigation";
+import { workspaceFetch } from "@/lib/workspace-fetch";
 import { useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import Link from "./workspace-navigation";
+import { useRouter } from "./workspace-navigation";
 import {
   ArrowLeft,
   Zap,
@@ -62,6 +64,7 @@ export function NewGrant({
   initialTab?: string;
 }) {
   const router = useRouter();
+  const demo = useDemo();
   const [tab, setTab] = useState(initialTab);
   const [template, setTemplate] = useState("hhap");
   const [owner, setOwner] = useState(userId);
@@ -121,7 +124,10 @@ export function NewGrant({
     try {
       const body = new FormData();
       body.set("file", file);
-      const response = await fetch("/api/import", { method: "POST", body });
+      const response = await workspaceFetch("/api/import", {
+        method: "POST",
+        body,
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error);
       setPreview(data);
@@ -144,6 +150,12 @@ export function NewGrant({
         title="Bring your grants into focus."
         description="Start with the essentials, or import a file you already have."
       />
+      {demo && (
+        <p className="help">
+          Demo imports support CSV files. PDF, DOCX, and XLSX extraction is
+          available in the hosted workspace. Attachments stay in this browser.
+        </p>
+      )}
       <div className="option-tabs">
         {[
           ["quick", "Quick add", "A name, a workflow, an owner.", Zap],
@@ -159,22 +171,30 @@ export function NewGrant({
             "Review and map CSV or XLSX rows.",
             Table2,
           ],
-        ].map(([value, label, desc, Icon]) => {
-          const I = Icon as typeof Zap;
-          return (
-            <button
-              key={String(value)}
-              onClick={() => setTab(String(value))}
-              className={`option-tab ${tab === value ? "active" : ""}`}
-            >
-              <I size={21} />
-              <span>
-                <strong>{String(label)}</strong>
-                <small>{String(desc)}</small>
-              </span>
-            </button>
-          );
-        })}
+        ]
+          .filter(([value]) => !demo || value !== "file")
+          .map(([value, label, desc, Icon]) => {
+            const I = Icon as typeof Zap;
+            return (
+              <button
+                key={String(value)}
+                onClick={() => setTab(String(value))}
+                className={`option-tab ${tab === value ? "active" : ""}`}
+              >
+                <I size={21} />
+                <span>
+                  <strong>
+                    {demo && value === "bulk" ? "Import a CSV" : String(label)}
+                  </strong>
+                  <small>
+                    {demo && value === "bulk"
+                      ? "Review and map CSV rows."
+                      : String(desc)}
+                  </small>
+                </span>
+              </button>
+            );
+          })}
       </div>
       {error && (
         <div className="error" role="alert">
@@ -328,13 +348,14 @@ export function NewGrant({
               : "Upload a grant document"}
           </h2>
           <p className="section-subtitle">
-            Manual exports from ZoomGrants and Dropbox are welcome. Files stay
-            on this server.
+            {demo
+              ? "Try a fictional CSV export. Your import stays in this browser."
+              : "Manual exports from ZoomGrants and Dropbox are welcome. Files stay in the private workspace."}
           </p>
           <div className="help">
             Use grant-level documents only. Do not upload HMIS records or
             personal client information. Maximum 4 MB; 500 spreadsheet rows;
-            PDF, DOCX, XLSX, CSV.
+            {demo ? "CSV files only in this demo." : "PDF, DOCX, XLSX, CSV."}
           </div>
           <div
             className="dropzone"
@@ -352,7 +373,7 @@ export function NewGrant({
             <input
               type="file"
               aria-label="Import file"
-              accept=".pdf,.docx,.xlsx,.csv"
+              accept={demo ? ".csv" : ".pdf,.docx,.xlsx,.csv"}
               disabled={busy}
               onChange={(e) => void upload(e.target.files?.[0])}
             />
@@ -612,7 +633,7 @@ export function NewGrant({
                     setBusy(true);
                     setError("");
                     try {
-                      const response = await fetch("/api/import", {
+                      const response = await workspaceFetch("/api/import", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({

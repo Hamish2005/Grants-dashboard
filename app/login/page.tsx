@@ -22,6 +22,13 @@ export default async function LoginPage({
         />
         <p className="eyebrow">GRANTS WORKSPACE</p>
         <h1>Welcome back</h1>
+        <a className="login-button" href="/demo">
+          Try the demo — no sign-in needed
+        </a>
+        <p>
+          Explore fictional grants in your own browser workspace. No setup
+          required.
+        </p>
         <p>
           Sign in with your organization’s Microsoft account to manage grants,
           deadlines, and team tasks.

@@ -1,5 +1,15 @@
 # Netlify deployment
 
+## MVP testing without hosted services
+
+Deploy normally with `npm run build`, then share `https://grant-dashboard.netlify.app/demo`. This public route needs no database, storage credentials, or Microsoft registration. Build scripts copy the browser database assets into `public/demo-assets`; Netlify serves them with the application. Each tester's fictional grants, edits, and attachments stay in that browser's IndexedDB. Reset restores samples only in that browser. Clearing site data removes progress; use one demo tab at a time.
+
+The demo supports CSV imports and local file attachments. PDF/DOCX/XLSX import extraction and shared staff records require the hosted workspace below. Staff APIs remain protected; the demo does not enable development authentication in production. The `/login` page includes a public demo link.
+
+Verification: `npm run build` then `npm run test:demo` tests the production bundle against an unreachable database, including browser persistence, independent testers, reset, local downloads, and no production API requests during demo workflows.
+
+## Hosted staff workspace
+
 The application now uses hosted PostgreSQL through `pg`/Drizzle and a private, site-wide Netlify Blobs store. Runtime imports do not create a local database or upload directory. No live database, storage credentials, or Entra app registration are provisioned by a Git push.
 
 ## Configure the production site

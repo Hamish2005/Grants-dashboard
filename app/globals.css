@@ -1587,3 +1587,32 @@ footer {
   margin-bottom: 12px;
   background: transparent;
 }
+/* Public browser-only MVP workspace. */
+.demo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  border: 1px solid #9bd6ec;
+  background: #eefaff;
+  border-radius: 12px;
+}
+.demo-banner strong,
+.demo-banner span {
+  display: block;
+}
+.demo-banner span {
+  font-size: 13px;
+  margin-top: 4px;
+}
+.demo-message {
+  padding: 28px;
+}
+@media (max-width: 640px) {
+  .demo-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
